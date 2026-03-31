@@ -5,7 +5,7 @@ import time
 
 st.set_page_config(page_title="无人机协同通信平台", layout="wide")
 
-# ==================== 优化器 ====================
+# ==================== 优化器（增加动量并加大学习率） ====================
 class StableOptimizer:
     def optimize(self, objective_fn, x0, max_iter=100):
         x = np.array(x0, dtype=float)
@@ -15,7 +15,8 @@ class StableOptimizer:
 
         for k in range(max_iter):
             grad = self._grad(objective_fn, x)
-            eta = 0.1 * (0.97 ** k)
+            # 加大学习率，让移动更明显
+            eta = 0.12 * (0.97 ** k)   # 原来0.1，现在0.12
             v = momentum * v - eta * grad
             x = x + v
             history.append(x.copy())
@@ -61,7 +62,7 @@ class Users:
         return self.pos
 
 
-# ==================== 目标函数 ====================
+# ==================== 目标函数（增强运动） ====================
 def build_objective(n_uav, users):
     def obj(x):
         cost = 0.0
@@ -70,20 +71,21 @@ def build_objective(n_uav, users):
         for i in range(n_uav):
             ux, uy, uz = x[3*i:3*i+3]
 
+            # 覆盖奖励（增大权重，鼓励移动）
             for p in u_pos:
                 d = np.hypot(ux-p[0], uy-p[1])
-                cost -= 1/(1+d/50)
+                cost -= 1.5/(1+d/50)   # 权重加大
 
-            # 高度变化
+            # 高度变化：激励高度变化
             target_h = 180 + 50*np.sin(ux/100) + 40*np.cos(uy/120)
-            cost += abs(uz - target_h) * 0.6
+            cost += abs(uz - target_h) * 0.8
 
             # 避障
             th = Terrain.height(ux, uy)
             if uz < th + 20:
                 cost += (th + 20 - uz) * 20
 
-        # 🚀 修复三维距离
+        # 避撞
         for i in range(n_uav):
             for j in range(i+1, n_uav):
                 dx = x[3*i] - x[3*j]
@@ -117,7 +119,7 @@ def create_3d_animation(uav_hist, users):
     def build_frame(t):
         data = []
 
-        # ===== 1. 地形（固定）=====
+        # 地形
         data.append(go.Surface(
             x=X, y=Y, z=Z,
             colorscale='Viridis',
@@ -125,7 +127,7 @@ def create_3d_animation(uav_hist, users):
             showscale=False
         ))
 
-        # ===== 2. 用户（固定）=====
+        # 用户
         data.append(go.Scatter3d(
             x=u_pos[:,0], y=u_pos[:,1], z=[50]*len(u_pos),
             mode='markers',
@@ -134,12 +136,12 @@ def create_3d_animation(uav_hist, users):
             showlegend=(t==0)
         ))
 
-        # ===== 3. 每个无人机（固定2个trace：轨迹+点）=====
+        # 每个无人机
         for i in range(n):
             traj = uav_hist[i][:t+1]
             curr = traj[-1]
 
-            # 轨迹（虚线）
+            # 轨迹虚线
             data.append(go.Scatter3d(
                 x=[p[0] for p in traj],
                 y=[p[1] for p in traj],
@@ -168,15 +170,14 @@ def create_3d_animation(uav_hist, users):
 
         return data
 
-    # ===== 构建帧 =====
     frames = [go.Frame(data=build_frame(t), name=str(t)) for t in range(T)]
 
     fig = go.Figure(
-        data=build_frame(0),  # 初始帧
+        data=build_frame(0),
         frames=frames
     )
 
-    # 🚨 关键修复：redraw=False
+    # 修改动画参数：使用 redraw=True 确保每帧更新
     fig.update_layout(
         updatemenus=[{
             "type": "buttons",
@@ -186,7 +187,7 @@ def create_3d_animation(uav_hist, users):
                     "label": "▶ 播放",
                     "method": "animate",
                     "args": [None, {
-                        "frame": {"duration": 60, "redraw": False},
+                        "frame": {"duration": 60, "redraw": True},   # 改为 True
                         "fromcurrent": True,
                         "mode": "immediate"
                     }]
@@ -206,7 +207,7 @@ def create_3d_animation(uav_hist, users):
                 {
                     "method": "animate",
                     "args": [[str(i)], {
-                        "frame": {"duration": 60, "redraw": False},
+                        "frame": {"duration": 60, "redraw": True},   # 改为 True
                         "mode": "immediate"
                     }],
                     "label": str(i)
@@ -224,37 +225,44 @@ def create_3d_animation(uav_hist, users):
         ),
         height=550,
         margin=dict(l=0, r=0, t=40, b=0),
-        title="🚁 无人机三维动态飞行（稳定修复版）"
+        title="🚁 无人机三维动态飞行（虚线轨迹）"
     )
 
     return fig
+
+
 # ==================== 主程序 ====================
 def main():
-    st.title("🚁 无人机三维协同通信系统（终极稳定版）")
+    st.title("🚁 无人机三维协同通信系统（动画修复版）")
 
-    n = st.slider("无人机数量",1,4,2)
-    u = st.slider("用户数量",20,80,40)
-    iters = st.slider("迭代次数",30,100,60)
+    n = st.slider("无人机数量", 1, 4, 2)
+    u = st.slider("用户数量", 20, 80, 40)
+    iters = st.slider("迭代次数", 30, 100, 60)
 
     if st.button("开始仿真"):
-        users = Users(u)
-        obj = build_objective(n, users)
-        x0 = init_pos(n,150)
+        with st.spinner("优化中，请稍候..."):
+            users = Users(u)
+            obj = build_objective(n, users)
+            x0 = init_pos(n, 150)
 
-        opt = StableOptimizer()
-        x_opt, hist = opt.optimize(obj, x0, iters)
+            opt = StableOptimizer()
+            x_opt, hist = opt.optimize(obj, x0, iters)
 
-        uav_hist = []
-        for i in range(n):
-            traj = []
-            for h in hist:
-                traj.append([h[3*i],h[3*i+1],h[3*i+2]])
-            uav_hist.append(traj)
+            # 计算最终位置并显示日志
+            final_cost = obj(x_opt)
+            st.info(f"优化完成，最终代价: {final_cost:.2f}")
 
-        fig = create_3d_animation(uav_hist, users)
-        st.plotly_chart(fig, use_container_width=True)
+            uav_hist = []
+            for i in range(n):
+                traj = []
+                for h in hist:
+                    traj.append([h[3*i], h[3*i+1], h[3*i+2]])
+                uav_hist.append(traj)
 
-        st.success("✅ 已修复：多无人机 / 不消失 / 虚线轨迹 / 三维飞行")
+            fig = create_3d_animation(uav_hist, users)
+            st.plotly_chart(fig, use_container_width=True)
+
+            st.success("✅ 动画已生成，请点击播放按钮观看无人机飞行（虚线轨迹）")
 
 
 if __name__ == "__main__":
