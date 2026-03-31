@@ -12,10 +12,10 @@ class StableOptimizer:
         history = [x.copy()]
         v = np.zeros_like(x)
         momentum = 0.9
-        algo_history = []  # 记录算法切换（简化版）
+        algo_history = []
         for k in range(max_iter):
             grad = self._grad(objective_fn, x)
-            eta = 0.12 * (0.97 ** k)   # 增大学习率，加速移动
+            eta = 0.12 * (0.97 ** k)
             v = momentum * v - eta * grad
             x = x + v
             history.append(x.copy())
@@ -34,11 +34,10 @@ class StableOptimizer:
         return g
 
 
-# ==================== 地形（扩大范围） ====================
+# ==================== 地形 ====================
 class Terrain:
     @staticmethod
     def height(x, y):
-        # 多山峰，范围-500~500
         return (
             150 * np.exp(-((x - 100) ** 2 + (y - 80) ** 2) / 6000) +
             130 * np.exp(-((x + 120) ** 2 + (y + 110) ** 2) / 7000) +
@@ -55,12 +54,11 @@ class Terrain:
         return X, Y, Z
 
 
-# ==================== 用户模型 ====================
+# ==================== 用户 ====================
 class Users:
     def __init__(self, n, spread=450):
         np.random.seed(42)
         self.pos = np.random.uniform(-spread, spread, (n, 2))
-        # 裁剪边界
         self.pos[:, 0] = np.clip(self.pos[:, 0], -480, 480)
         self.pos[:, 1] = np.clip(self.pos[:, 1], -480, 480)
 
@@ -68,18 +66,14 @@ class Users:
         return self.pos
 
 
-# ==================== 目标函数（强化水平移动） ====================
+# ==================== 目标函数 ====================
 def build_objective(n_uav, users, objective_type="coverage", solar_enabled=True):
-    """
-    objective_type: 'coverage', 'fairness', 'energy'
-    """
     def obj(x):
         cost = 0.0
         u_pos = users.get()
         for i in range(n_uav):
             ux, uy, uz = x[3*i], x[3*i+1], x[3*i+2]
 
-            # 覆盖质量（距离倒数加权）
             coverage = 0.0
             for p in u_pos:
                 d = np.hypot(ux - p[0], uy - p[1])
@@ -89,7 +83,6 @@ def build_objective(n_uav, users, objective_type="coverage", solar_enabled=True)
             if objective_type == "coverage":
                 cost -= coverage * 45.0
             elif objective_type == "fairness":
-                # 最小用户距离（最差用户）
                 min_d = min(np.hypot(ux - p[0], uy - p[1]) for p in u_pos)
                 cost -= 1.0 / (1.0 + min_d / 40.0) * 40
                 cost -= coverage * 10
@@ -97,25 +90,20 @@ def build_objective(n_uav, users, objective_type="coverage", solar_enabled=True)
                 cost -= coverage * 28
                 cost += (uz / 300) * 6
 
-            # 向灾区中心轻微吸引（鼓励水平移动）
             cost += np.hypot(ux, uy) * 0.008
 
-            # 动态高度：让无人机在飞行中起伏，形成三维轨迹
             target_h = 180 + 50 * np.sin(ux / 100) + 40 * np.cos(uy / 120)
             cost += abs(uz - target_h) * 0.6
 
-            # 高度约束
             if uz < 80:
                 cost += (80 - uz) * 2.5
             if uz > 350:
                 cost += (uz - 350) * 1.5
 
-            # 地形避障
             th = Terrain.height(ux, uy)
             if uz < th + 20:
                 cost += (th + 20 - uz) * 25
 
-        # 避撞（修复多无人机）
         for i in range(n_uav):
             for j in range(i+1, n_uav):
                 dx = x[3*i] - x[3*j]
@@ -128,17 +116,16 @@ def build_objective(n_uav, users, objective_type="coverage", solar_enabled=True)
     return obj
 
 
-# ==================== 初始位置（外圈大半径） ====================
 def init_pos(n, h):
     pos = []
     for i in range(n):
         ang = 2 * np.pi * i / n
-        radius = 400   # 从外圈开始
+        radius = 400
         pos += [radius * np.cos(ang), radius * np.sin(ang), h]
     return pos
 
 
-# ==================== 动态3D动画（稳定修复版） ====================
+# ==================== 动态3D动画（修复版：确保无人机移动） ====================
 def create_3d_animation(uav_hist, users):
     X, Y, Z = Terrain.surface()
     u_pos = users.get()
@@ -146,21 +133,24 @@ def create_3d_animation(uav_hist, users):
     n = len(uav_hist)
     colors = ['#FF3333', '#33FF33', '#3399FF', '#FFCC33', '#FF33CC']
 
+    # 预先创建地形和用户轨迹（静态，每帧都会重新添加，但这里先定义好）
+    # 我们将在帧生成函数中每次都创建新的trace，确保数据更新
+
     def build_frame(t):
         data = []
-        # 1. 地形
+        # 地形
         data.append(go.Surface(
             x=X, y=Y, z=Z,
             colorscale='Viridis', opacity=0.7, showscale=False,
             contours=dict(z=dict(show=True, usecolormap=True, highlightcolor="limegreen"))
         ))
-        # 2. 用户（z=50，高于所有地形）
+        # 用户
         data.append(go.Scatter3d(
             x=u_pos[:,0], y=u_pos[:,1], z=[50]*len(u_pos),
             mode='markers', marker=dict(color='gold', size=4),
             name='灾区用户', showlegend=(t==0)
         ))
-        # 3. 无人机轨迹（虚线）和当前点（实心圆）
+        # 无人机
         for i in range(n):
             traj = uav_hist[i][:t+1]
             curr = traj[-1]
@@ -181,21 +171,29 @@ def create_3d_animation(uav_hist, users):
 
     frames = [go.Frame(data=build_frame(t), name=str(t)) for t in range(T)]
 
-    fig = go.Figure(data=build_frame(0), frames=frames)
+    # 初始帧（t=0）的数据
+    initial_data = build_frame(0)
 
+    fig = go.Figure(data=initial_data, frames=frames)
+
+    # 动画控件，redraw=True 强制重绘
     fig.update_layout(
         updatemenus=[{
-            "type": "buttons", "showactive": False,
+            "type": "buttons",
+            "showactive": False,
             "buttons": [
                 {"label": "▶ 播放", "method": "animate",
-                 "args": [None, {"frame": {"duration": 60, "redraw": False}, "fromcurrent": True, "mode": "immediate"}]},
+                 "args": [None, {"frame": {"duration": 60, "redraw": True}, "fromcurrent": True, "mode": "immediate"}]},
                 {"label": "⏸ 暂停", "method": "animate",
                  "args": [[None], {"frame": {"duration": 0}, "mode": "immediate"}]}
-            ]
+            ],
+            "x": 0.1, "y": 0
         }],
         sliders=[{
-            "steps": [{"method": "animate", "args": [[str(i)], {"frame": {"duration": 60, "redraw": False}, "mode": "immediate"}],
-                       "label": str(i)} for i in range(T)],
+            "steps": [
+                {"method": "animate", "args": [[str(i)], {"frame": {"duration": 60, "redraw": True}, "mode": "immediate"}],
+                 "label": str(i)} for i in range(T)
+            ],
             "x": 0.1, "len": 0.9
         }],
         scene=dict(
@@ -264,7 +262,6 @@ def create_energy_chart(iterations, solar_enabled):
     return fig
 
 def create_algorithm_switch_chart(algo_history):
-    # 这里简化，因为我们只有一种算法，但保留接口
     algo_names = ['SGD+Momentum']
     numeric = [0]*len(algo_history[:100])
     fig = go.Figure()
@@ -317,7 +314,10 @@ def main():
                 x_opt, history, algo_history = opt.optimize(obj_fn, x0, max_iter)
                 elapsed = time.time() - start
 
-                # 整理无人机轨迹
+                # 打印历史中第一个无人机的位置变化（调试用，可注释）
+                # print("Initial UAV1 pos:", history[0][:3])
+                # print("Final UAV1 pos:", history[-1][:3])
+
                 uav_hist = []
                 for i in range(n_uav):
                     traj = []
@@ -329,7 +329,6 @@ def main():
                 final_cost = obj_fn(x_opt)
                 coverage = max(0, min(98, ((-final_cost / (n_uav * 45)) * 100 + 60)))
 
-                # 指标卡片
                 col1, col2, col3, col4, col5 = st.columns(5)
                 with col1: st.metric("优化耗时", f"{elapsed:.2f} 秒")
                 with col2: st.metric("收敛迭代", f"{len(history)-1} 次")
@@ -337,12 +336,10 @@ def main():
                 with col4: st.metric("当前算法", "SGD+Momentum")
                 with col5: st.metric("用户数量", n_users)
 
-                # 动态3D图
                 st.subheader("🗺️ 无人机动态飞行（虚线轨迹） + 立体山丘 + 灾区用户")
                 fig_anim = create_3d_animation(uav_hist, users)
                 st.plotly_chart(fig_anim, use_container_width=True)
 
-                # 辅助图表
                 col_left, col_right = st.columns(2)
                 with col_left:
                     if final_pos:
@@ -369,7 +366,6 @@ def main():
                     fig_rad = create_radar_chart(radar_vals)
                     st.plotly_chart(fig_rad, use_container_width=True)
 
-                # 日志
                 st.subheader("📝 仿真日志")
                 log = f"✅ 仿真完成！耗时 {elapsed:.2f}s，覆盖率 {coverage:.1f}%\n"
                 log += f"无人机从外圈（半径400m）向中心用户群水平移动，同时高度动态变化，形成三维轨迹。\n"
