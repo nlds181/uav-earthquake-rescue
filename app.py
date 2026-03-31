@@ -112,20 +112,20 @@ def create_3d_animation(uav_hist, users):
     T = len(uav_hist[0])
     n = len(uav_hist)
 
-    colors = ['#FF4B4B','#4BFF4B','#4B7BFF','#FFD84B']
+    colors = ['#FF3333', '#33FF33', '#3399FF', '#FFCC33', '#FF33CC']
 
     def build_frame(t):
         data = []
 
-        # ===== 地形（固定）=====
+        # ===== 1. 地形（固定）=====
         data.append(go.Surface(
             x=X, y=Y, z=Z,
             colorscale='Viridis',
-            opacity=0.65,
+            opacity=0.7,
             showscale=False
         ))
 
-        # ===== 用户 =====
+        # ===== 2. 用户（固定）=====
         data.append(go.Scatter3d(
             x=u_pos[:,0], y=u_pos[:,1], z=[50]*len(u_pos),
             mode='markers',
@@ -134,11 +134,12 @@ def create_3d_animation(uav_hist, users):
             showlegend=(t==0)
         ))
 
+        # ===== 3. 每个无人机（固定2个trace：轨迹+点）=====
         for i in range(n):
             traj = uav_hist[i][:t+1]
             curr = traj[-1]
 
-            # ===== 轨迹（渐变感）=====
+            # 轨迹（虚线）
             data.append(go.Scatter3d(
                 x=[p[0] for p in traj],
                 y=[p[1] for p in traj],
@@ -149,11 +150,10 @@ def create_3d_animation(uav_hist, users):
                     width=4,
                     dash='dash'
                 ),
-                opacity=0.8,
                 showlegend=False
             ))
 
-            # ===== 当前点 =====
+            # 当前点
             data.append(go.Scatter3d(
                 x=[curr[0]], y=[curr[1]], z=[curr[2]],
                 mode='markers',
@@ -166,27 +166,17 @@ def create_3d_animation(uav_hist, users):
                 showlegend=(t==0)
             ))
 
-            # ===== 覆盖圈（呼吸效果）=====
-            theta = np.linspace(0, 2*np.pi, 40)
-            r = 120 + 10*np.sin(t/5)   # 呼吸变化
-            cx = curr[0] + r*np.cos(theta)
-            cy = curr[1] + r*np.sin(theta)
-            cz = np.ones_like(cx) * curr[2]
-
-            data.append(go.Scatter3d(
-                x=cx, y=cy, z=cz,
-                mode='lines',
-                line=dict(color=colors[i % len(colors)], width=2),
-                opacity=0.25,
-                showlegend=False
-            ))
-
         return data
 
+    # ===== 构建帧 =====
     frames = [go.Frame(data=build_frame(t), name=str(t)) for t in range(T)]
 
-    fig = go.Figure(data=build_frame(0), frames=frames)
+    fig = go.Figure(
+        data=build_frame(0),  # 初始帧
+        frames=frames
+    )
 
+    # 🚨 关键修复：redraw=False
     fig.update_layout(
         updatemenus=[{
             "type": "buttons",
@@ -211,16 +201,30 @@ def create_3d_animation(uav_hist, users):
                 }
             ]
         }],
+        sliders=[{
+            "steps": [
+                {
+                    "method": "animate",
+                    "args": [[str(i)], {
+                        "frame": {"duration": 60, "redraw": False},
+                        "mode": "immediate"
+                    }],
+                    "label": str(i)
+                }
+                for i in range(T)
+            ],
+            "x": 0.1,
+            "len": 0.9
+        }],
         scene=dict(
             xaxis_title='X (m)',
             yaxis_title='Y (m)',
             zaxis_title='高度 (m)',
-            camera=dict(eye=dict(x=1.6, y=1.6, z=1.2)),
-            bgcolor='rgba(0,0,0,0)'
+            camera=dict(eye=dict(x=1.6, y=1.6, z=1.2))
         ),
-        height=580,
+        height=550,
         margin=dict(l=0, r=0, t=40, b=0),
-        title="🚁 三维无人机动态飞行（答辩高级版）"
+        title="🚁 无人机三维动态飞行（稳定修复版）"
     )
 
     return fig
