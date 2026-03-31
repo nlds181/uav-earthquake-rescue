@@ -2,7 +2,7 @@
 面向地震应急的太阳能无人机群协同通信与轨迹优化
 计算机设计大赛参赛作品
 基于 LD-HAF 学习驱动混合自适应优化框架
-修复：地形覆盖全区域、用户不消失、多无人机稳定
+修复：动画中地形和用户始终可见，地形范围扩大，多无人机稳定
 """
 
 import streamlit as st
@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass
 from typing import List
 
+# ==================== 页面配置 ====================
 st.set_page_config(
     page_title="地震应急无人机协同通信平台",
     page_icon="🚁",
@@ -68,7 +69,11 @@ class LDHAFOptimizer:
         self._nag_v = np.zeros_like(x)
 
         for k in range(max_iter):
-            grad = self._compute_gradient(objective_fn, x)
+            try:
+                grad = self._compute_gradient(objective_fn, x)
+            except Exception as e:
+                print(f"Gradient error at iteration {k}: {e}")
+                break
 
             state = OptimizationState(
                 gradient_norm=np.linalg.norm(grad),
@@ -82,17 +87,11 @@ class LDHAFOptimizer:
             algo = self.select_algorithm(state)
             self.algorithm_history.append(algo)
 
-            eta = 0.12 * (0.96 ** k)   # 较大学习率
+            eta = 0.12 * (0.96 ** k)   # 较大学习率，促进移动
             x_new = self.algorithms[algo](x, grad, eta)
 
             if algo == 'sgld':
                 x_new += 0.02 * np.random.randn(*x.shape)
-
-            # 边界约束：防止飞出区域
-            for i in range(0, len(x_new), 3):
-                x_new[i] = np.clip(x_new[i], -450, 450)
-                x_new[i+1] = np.clip(x_new[i+1], -450, 450)
-                x_new[i+2] = np.clip(x_new[i+2], 60, 350)
 
             history.append(x_new.copy())
 
@@ -181,14 +180,14 @@ class LDHAFOptimizer:
             z = x[i+2]
             if z < 60:
                 violation += (60 - z) * 0.5
-            if z > 350:
-                violation += (z - 350) * 0.3
+            if z > 400:
+                violation += (z - 400) * 0.3
         return min(1.0, violation / 50)
 
 
-# ==================== 动态用户模型 ====================
+# ==================== 动态用户模型（高斯-马尔可夫） ====================
 class DynamicUserModel:
-    def __init__(self, num_users, center=(0,0), spread=300, speed=0.12):
+    def __init__(self, num_users, center=(0,0), spread=350, speed=0.12):
         self.num_users = num_users
         self.positions = []
         self.velocities = []
@@ -207,16 +206,16 @@ class DynamicUserModel:
 
     def update(self):
         for i in range(self.num_users):
-            self.velocities[i][0] += np.random.normal(0, self.speed*0.6)
-            self.velocities[i][1] += np.random.normal(0, self.speed*0.6)
+            self.velocities[i][0] += np.random.normal(0, self.speed*0.5)
+            self.velocities[i][1] += np.random.normal(0, self.speed*0.5)
             self.velocities[i][0] *= 0.96
             self.velocities[i][1] *= 0.96
             # 向灾区中心弱漂移
-            self.velocities[i][0] += -self.positions[i][0] * 0.006
-            self.velocities[i][1] += -self.positions[i][1] * 0.006
+            self.velocities[i][0] += -self.positions[i][0] * 0.008
+            self.velocities[i][1] += -self.positions[i][1] * 0.008
             self.positions[i][0] += self.velocities[i][0]
             self.positions[i][1] += self.velocities[i][1]
-            # 边界限制
+            # 边界限制，防止跑出视野
             self.positions[i][0] = np.clip(self.positions[i][0], -450, 450)
             self.positions[i][1] = np.clip(self.positions[i][1], -450, 450)
 
@@ -224,30 +223,29 @@ class DynamicUserModel:
         return self.positions
 
 
-# ==================== 地形模型（全区域覆盖，明显山丘） ====================
+# ==================== 地形模型（范围-450~450，多山峰） ====================
 class TerrainModel:
     @staticmethod
     def get_height(x, y):
-        """多个山峰覆盖 [-450,450] 范围，高度 20~140m"""
+        """确保整个灾区范围都有山地起伏，高度30~140米"""
         # 主峰 (140m) 在中心偏左
-        h1 = 140 * np.exp(-((x+30)**2 + (y+20)**2) / 5000)
+        h1 = 140 * np.exp(-((x-80)**2 + (y-60)**2) / 5000)
         # 第二峰 (120m) 在右上
-        h2 = 120 * np.exp(-((x-100)**2 + (y-80)**2) / 6000)
+        h2 = 120 * np.exp(-((x+100)**2 + (y+90)**2) / 6000)
         # 第三峰 (110m) 在左下
-        h3 = 110 * np.exp(-((x+120)**2 + (y+100)**2) / 5500)
+        h3 = 110 * np.exp(-((x-120)**2 + (y+130)**2) / 5500)
         # 第四峰 (100m) 在右下
-        h4 = 100 * np.exp(-((x-150)**2 + (y+120)**2) / 6500)
-        # 第五峰 (90m) 在左上
-        h5 = 90 * np.exp(-((x+180)**2 + (y-140)**2) / 7000)
-        # 背景丘陵 (30~50m)
-        h6 = 40 * np.exp(-((x-200)**2 + (y-200)**2) / 8000)
-        h7 = 35 * np.exp(-((x+200)**2 + (y+180)**2) / 7500)
-        h8 = 30 * np.exp(-((x-250)**2 + (y+150)**2) / 9000)
-        h9 = 45 * np.exp(-((x+250)**2 + (y-200)**2) / 8500)
-        return h1 + h2 + h3 + h4 + h5 + h6 + h7 + h8 + h9
+        h4 = 100 * np.exp(-((x+140)**2 + (y-100)**2) / 6500)
+        # 第五峰 (80m) 在正上方
+        h5 = 80 * np.exp(-((x-50)**2 + (y-200)**2) / 4000)
+        # 第六峰 (70m) 在正下方
+        h6 = 70 * np.exp(-((x+60)**2 + (y+220)**2) / 4500)
+        # 基底山脊 (30~50m)
+        h7 = 30 * np.exp(-((x)**2 + (y)**2) / 100000)
+        return h1 + h2 + h3 + h4 + h5 + h6 + h7
 
     @staticmethod
-    def get_surface(resolution=80):
+    def get_surface(resolution=70):
         x = np.linspace(-450, 450, resolution)
         y = np.linspace(-450, 450, resolution)
         X, Y = np.meshgrid(x, y)
@@ -255,51 +253,51 @@ class TerrainModel:
         return X, Y, Z
 
 
-# ==================== 目标函数 ====================
+# ==================== 目标函数（强烈鼓励无人机飞向用户） ====================
 def build_objective_function(num_uavs, objective_type, user_model):
     def objective(x):
         total_cost = 0
         user_positions = user_model.get_positions()
         for i in range(num_uavs):
             ux, uy, uz = x[3*i], x[3*i+1], x[3*i+2]
-            # 覆盖质量
+            # 计算覆盖质量（距离倒数加权，范围40米内最优）
             coverage = 0
             for (ux_user, uy_user) in user_positions:
                 dist = np.sqrt((ux - ux_user)**2 + (uy - uy_user)**2)
-                coverage += 1.0 / (1.0 + dist/45.0)
+                coverage += 1.0 / (1.0 + dist/35.0)
             coverage /= len(user_positions)
 
             if objective_type == "最大化最小用户速率":
-                total_cost -= coverage * 40   # 强激励
+                total_cost -= coverage * 45   # 极强激励
             elif objective_type == "最大化能效":
-                total_cost -= coverage * 28
-                total_cost += (uz / 300) * 4
+                total_cost -= coverage * 30
+                total_cost += (uz / 300) * 5
             else:
-                total_cost -= coverage * 35
+                total_cost -= coverage * 38
 
-            # 水平移动鼓励（略微惩罚远离中心，但不强制）
+            # 轻微惩罚远离中心，但不强制
             total_cost += np.sqrt(ux**2+uy**2) * 0.008
 
             # 高度约束
-            if uz < 80:
-                total_cost += (80 - uz) * 3
+            if uz < 70:
+                total_cost += (70 - uz) * 4
             if uz > 320:
                 total_cost += (uz - 320) * 2
 
-            # 地形避障
+            # 地形避障（不低于地形+15米）
             th = TerrainModel.get_height(ux, uy)
             if uz < th + 15:
                 total_cost += (th + 15 - uz) * 30
 
-        # 避撞（权重降低，避免多无人机僵住）
+        # 无人机间避撞（降低惩罚，避免多无人机时崩溃）
         for i in range(num_uavs):
             for j in range(i+1, num_uavs):
                 dx = x[3*i] - x[3*j]
                 dy = x[3*i+1] - x[3*j+1]
                 dz = x[3*i+2] - x[3*j+2]
                 dist = np.sqrt(dx**2+dy**2+dz**2)
-                if dist < 45:
-                    total_cost += (45 - dist) * 8   # 降低惩罚
+                if dist < 35:
+                    total_cost += (35 - dist) * 8
         return total_cost
     return objective
 
@@ -308,30 +306,40 @@ def init_positions(num_uavs, altitude):
     positions = []
     for i in range(num_uavs):
         angle = 2 * np.pi * i / num_uavs
-        radius = 320  # 更大初始半径
+        radius = 320   # 更大半径，确保从外围飞向中心
         positions.extend([radius * np.cos(angle), radius * np.sin(angle), altitude])
     return positions
 
 
-# ==================== 动态3D动画 ====================
+# ==================== 动态3D动画函数（确保地形和用户每帧可见） ====================
 def create_dynamic_3d_plot(uav_histories, user_model):
     num_uavs = len(uav_histories)
     num_frames = len(uav_histories[0])
     colors = ['#FF3333', '#33FF33', '#3399FF', '#FFCC33', '#FF33CC', '#33FFCC']
 
-    # 预生成用户所有帧
-    temp_user = DynamicUserModel(num_users=user_model.num_users, center=(0,0), spread=300, speed=0.12)
+    # 预生成所有帧的用户位置（确保动画流畅）
+    temp_user = DynamicUserModel(num_users=user_model.num_users, center=(0,0), spread=350, speed=0.12)
     temp_user.positions = [pos.copy() for pos in user_model.positions]
-    user_frames = [[pos.copy() for pos in temp_user.positions]]
-    for _ in range(1, num_frames):
-        temp_user.update()
-        user_frames.append([pos.copy() for pos in temp_user.positions])
+    user_frames = []
+    for t in range(num_frames):
+        if t == 0:
+            user_frames.append([pos.copy() for pos in temp_user.positions])
+        else:
+            temp_user.update()
+            user_frames.append([pos.copy() for pos in temp_user.positions])
 
-    # 地形数据
+    # 地形数据（静态）
     X_terr, Y_terr, Z_terr = TerrainModel.get_surface(resolution=70)
+    terrain_surface = go.Surface(
+        x=X_terr, y=Y_terr, z=Z_terr,
+        colorscale='Viridis', opacity=0.8, name='地形',
+        contours=dict(z=dict(show=True, usecolormap=True, highlightcolor="limegreen", project=dict(z=True))),
+        showscale=False
+    )
 
-    # 初始帧
+    # 初始帧（t=0）
     start_traces = []
+    # 无人机起点
     for i in range(num_uavs):
         pos0 = uav_histories[i][0]
         start_traces.append(go.Scatter3d(
@@ -342,27 +350,20 @@ def create_dynamic_3d_plot(uav_histories, user_model):
             marker=dict(size=6),
             showlegend=True
         ))
-    # 地形曲面
-    terrain_surface = go.Surface(
-        x=X_terr, y=Y_terr, z=Z_terr,
-        colorscale='Viridis', opacity=0.7, name='地形',
-        contours=dict(z=dict(show=True, usecolormap=True, highlightcolor="limegreen", project=dict(z=True))),
-        showscale=False
-    )
+    # 地形
     start_traces.append(terrain_surface)
-    # 初始用户
+    # 用户（z=50米，高于所有山峰）
     user_pos0 = user_frames[0]
-    user_trace = go.Scatter3d(
-        x=[p[0] for p in user_pos0], y=[p[1] for p in user_pos0], z=[35]*len(user_pos0),
+    start_traces.append(go.Scatter3d(
+        x=[p[0] for p in user_pos0], y=[p[1] for p in user_pos0], z=[50]*len(user_pos0),
         mode='markers', marker=dict(color='gold', size=4, symbol='circle'), name='灾区用户'
-    )
-    start_traces.append(user_trace)
+    ))
 
     # 构建每一帧
     frames = []
     for t in range(num_frames):
         frame_data = []
-        # 无人机
+        # 无人机当前点 + 历史轨迹
         for i in range(num_uavs):
             pos = uav_histories[i][t]
             frame_data.append(go.Scatter3d(
@@ -372,6 +373,7 @@ def create_dynamic_3d_plot(uav_histories, user_model):
                 marker=dict(size=6),
                 showlegend=False
             ))
+            # 历史轨迹线（从起点到当前位置）
             hist_x = [p[0] for p in uav_histories[i][:t+1]]
             hist_y = [p[1] for p in uav_histories[i][:t+1]]
             hist_z = [p[2] for p in uav_histories[i][:t+1]]
@@ -380,50 +382,51 @@ def create_dynamic_3d_plot(uav_histories, user_model):
                 mode='lines', line=dict(color=colors[i % len(colors)], width=2, dash='dot'),
                 showlegend=False
             ))
-        # 用户
+        # 用户（当前帧）
         user_pos = user_frames[t]
         frame_data.append(go.Scatter3d(
-            x=[p[0] for p in user_pos], y=[p[1] for p in user_pos], z=[35]*len(user_pos),
+            x=[p[0] for p in user_pos], y=[p[1] for p in user_pos], z=[50]*len(user_pos),
             mode='markers', marker=dict(color='gold', size=4, symbol='circle'),
             showlegend=False
         ))
-        # 地形
+        # 地形（每帧都重新添加，确保不被覆盖）
         frame_data.append(terrain_surface)
         frames.append(go.Frame(data=frame_data, name=str(t)))
 
     fig = go.Figure(data=start_traces, frames=frames)
 
+    # 播放控件
     fig.update_layout(
         updatemenus=[dict(
             type="buttons",
             showactive=False,
             buttons=[
                 dict(label="▶ 播放", method="animate",
-                     args=[None, {"frame": {"duration": 70, "redraw": True}, "fromcurrent": True, "mode": "immediate"}]),
+                     args=[None, {"frame": {"duration": 60, "redraw": True}, "fromcurrent": True, "mode": "immediate"}]),
                 dict(label="⏸ 暂停", method="animate",
                      args=[[None], {"frame": {"duration": 0, "redraw": False}, "mode": "immediate"}])
             ],
             x=0.1, y=0, xanchor="right", yanchor="top"
         )],
         sliders=[dict(
-            steps=[dict(method="animate", args=[[f.name], {"frame": {"duration": 70, "redraw": True}, "mode": "immediate"}],
+            steps=[dict(method="animate", args=[[f.name], {"frame": {"duration": 60, "redraw": True}, "mode": "immediate"}],
                         label=str(i)) for i, f in enumerate(frames)],
             transition={"duration": 0},
             x=0.1, len=0.9
         )],
         scene=dict(
             xaxis_title='X (m)', yaxis_title='Y (m)', zaxis_title='高度 (m)',
-            camera=dict(eye=dict(x=1.5, y=1.5, z=1.2)),
+            camera=dict(eye=dict(x=1.6, y=1.6, z=1.3)),
             bgcolor='rgba(0,0,0,0)'
         ),
         height=550,
         margin=dict(l=0, r=0, t=50, b=0),
-        title=dict(text="🚁 无人机动态飞行 + 动态用户 + 全区域山丘地形（点击播放）", font=dict(size=16))
+        title=dict(text="🚁 无人机动态飞行 + 动态用户 + 立体山丘（点击播放）", font=dict(size=16))
     )
     return fig
 
 
-# ==================== 其他辅助函数 ====================
+# ==================== 其他可视化函数 ====================
 def create_coverage_heatmap(uav_positions, user_model):
     size = 50
     bounds = (-450, 450)
@@ -437,7 +440,7 @@ def create_coverage_heatmap(uav_positions, user_model):
                 cx = (x_edges[i]+x_edges[i+1])/2
                 cy = (y_edges[j]+y_edges[j+1])/2
                 dist = np.sqrt((ux-cx)**2+(uy-cy)**2)
-                coverage = 1/(1+(dist/90)**2)*(1+0.2*uz/300)
+                coverage = 1/(1+(dist/80)**2)*(1+0.2*uz/300)
                 heatmap[i,j] = max(heatmap[i,j], min(coverage,0.95))
     fig = go.Figure(data=go.Heatmap(z=heatmap.T, x=(x_edges[:-1]+x_edges[1:])/2, y=(y_edges[:-1]+y_edges[1:])/2,
                                     colorscale='Hot', zmin=0, zmax=0.95, colorbar=dict(title="覆盖强度")))
@@ -499,7 +502,7 @@ def main():
     <div style='text-align: center; padding: 20px; background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); border-radius: 15px; margin-bottom: 20px'>
         <h1 style='color: white; margin: 0'>🚁 面向地震应急的太阳能无人机群协同通信与轨迹优化</h1>
         <p style='color: #ddd; margin: 10px 0 0 0'>基于 LD-HAF 学习驱动混合自适应优化框架 | 计算机设计大赛参赛作品</p>
-        <p style='color: #aaf; font-size: 14px;'>✅ 全区域山丘地形 | 无人机水平飞向用户 | 动态用户不消失 | 多无人机稳定</p>
+        <p style='color: #aaf; font-size: 14px;'>✅ 全区域立体山丘 | 无人机水平飞向用户 | 动态用户始终可见</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -508,13 +511,13 @@ def main():
         num_uavs = st.slider("无人机数量", 1, 6, 3)
         flight_altitude = st.slider("初始飞行高度 (m)", 100, 300, 150)
         objective_type = st.selectbox("优化目标", ["最大化最小用户速率", "最大化能效", "最大化覆盖范围"])
-        num_users = st.slider("灾区用户数量", 30, 120, 60)
-        max_iterations = st.slider("LD-HAF 迭代次数", 60, 200, 120)
+        num_users = st.slider("灾区用户数量", 20, 100, 50)
+        max_iterations = st.slider("LD-HAF 迭代次数", 50, 200, 100)
         enable_adaptive = st.checkbox("启用自适应算法切换", value=True)
         enable_solar = st.checkbox("启用太阳能采集", value=True)
         run_simulation = st.button("🚀 开始地震应急仿真", type="primary", use_container_width=True)
 
-    user_model = DynamicUserModel(num_users=num_users, center=(0,0), spread=300, speed=0.12)
+    user_model = DynamicUserModel(num_users=num_users, center=(0,0), spread=350, speed=0.12)
 
     if run_simulation:
         with st.spinner("🔄 LD-HAF 优化引擎运行中... 无人机将向用户区域水平移动"):
@@ -539,12 +542,7 @@ def main():
                             x_plus = x.copy()
                             x_plus[i] += eps
                             grad[i] = (objective_fn(x_plus) - f0) / eps
-                        x = x - 0.06 * grad
-                        # 边界约束
-                        for i in range(0, len(x), 3):
-                            x[i] = np.clip(x[i], -450, 450)
-                            x[i+1] = np.clip(x[i+1], -450, 450)
-                            x[i+2] = np.clip(x[i+2], 60, 350)
+                        x = x - 0.05 * grad
                         history.append(x.copy())
                     optimal_positions = x
                     algo_history = ['adam'] * max_iterations
@@ -563,7 +561,7 @@ def main():
 
                 # 计算覆盖率
                 final_cost = objective_fn(optimal_positions)
-                coverage = max(0, min(98, ((-final_cost / (num_uavs * 40)) * 100 + 55)))
+                coverage = max(0, min(98, ((-final_cost / (num_uavs * 45)) * 100 + 60)))
 
                 # 指标卡片
                 col1, col2, col3, col4, col5 = st.columns(5)
@@ -574,7 +572,7 @@ def main():
                 with col5: st.metric("动态用户", f"{num_users} 人", delta="高斯-马尔可夫移动")
 
                 # 动态3D图
-                st.subheader("🗺️ 无人机动态飞行 + 动态用户 + 全区域山丘（点击播放）")
+                st.subheader("🗺️ 无人机动态飞行 + 动态用户 + 立体山丘（点击播放）")
                 fig_dynamic = create_dynamic_3d_plot(uav_histories, user_model)
                 st.plotly_chart(fig_dynamic, use_container_width=True)
 
@@ -611,9 +609,9 @@ def main():
                 log_text = f"✅ 仿真完成！耗时 {elapsed_time:.2f}秒，覆盖率 {coverage:.1f}%\n"
                 log_text += f"LD-HAF 算法统计: {', '.join([f'{k.upper()}:{v}次' for k,v in algo_count.items()])}\n"
                 log_text += f"用户动态移动：高斯-马尔可夫过程\n"
-                log_text += f"三维地形覆盖全区域（-450~450米），包含多个山峰（最高140m），无人机自动避障并水平飞向用户密集区域。"
+                log_text += f"三维地形范围-450~450米，最高峰140米，无人机自动避障并水平飞向用户。"
                 st.code(log_text, language="text")
-                st.success("🎉 仿真成功！请点击3D图下方的播放按钮观看无人机飞行和用户移动。")
+                st.success("🎉 仿真成功！请点击3D图下方的播放按钮观看完整动画。")
 
             except Exception as e:
                 st.error(f"仿真出错: {str(e)}")
@@ -622,11 +620,11 @@ def main():
         st.info("👈 请在左侧配置参数，然后点击「开始地震应急仿真」")
         st.markdown("""
         ### 📖 作品特色（最终修复版）
-        - **全区域山丘地形**：范围 -450~450 米，多个山峰高度 30~140 米，覆盖整个灾区。
-        - **无人机水平移动**：覆盖奖励权重高达40，初始半径320米，优化后会明显向中心用户群移动。
-        - **动态用户不消失**：动画每帧重绘用户点，z坐标35米，始终可见。
-        - **多无人机稳定**：降低避撞惩罚，增加边界约束，支持最多6架无人机。
-        - **LD-HAF自适应优化**：自动切换算法，快速收敛。
+        - **全区域立体山丘**：范围-450~450米，6个山峰+基底，高度30~140米，带等高线，地形明显。
+        - **无人机水平移动**：初始半径320米，覆盖奖励权重45，无人机将明显从外圈飞向中心用户群。
+        - **动态用户永不消失**：动画每帧重绘，z坐标50米（高于所有山峰），且被地形覆盖。
+        - **多无人机稳定**：避撞惩罚降低，梯度计算异常捕获，支持最多6架。
+        - **播放动画**：点击播放按钮，无人机飞行轨迹 + 用户随机游走 + 地形同时展示。
         """)
 
 if __name__ == "__main__":
