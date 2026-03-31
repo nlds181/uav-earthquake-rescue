@@ -112,16 +112,16 @@ def create_3d_animation(uav_hist, users):
     T = len(uav_hist[0])
     n = len(uav_hist)
 
-    colors = ['#FF3333','#33FF33','#3399FF','#FFCC33']
+    colors = ['#FF4B4B','#4BFF4B','#4B7BFF','#FFD84B']
 
     def build_frame(t):
         data = []
 
-        # ===== 地形 =====
+        # ===== 地形（固定）=====
         data.append(go.Surface(
             x=X, y=Y, z=Z,
             colorscale='Viridis',
-            opacity=0.6,
+            opacity=0.65,
             showscale=False
         ))
 
@@ -129,78 +129,46 @@ def create_3d_animation(uav_hist, users):
         data.append(go.Scatter3d(
             x=u_pos[:,0], y=u_pos[:,1], z=[50]*len(u_pos),
             mode='markers',
-            marker=dict(size=4, color='gold'),
-            name="用户"
+            marker=dict(color='gold', size=4),
+            name='用户',
+            showlegend=(t==0)
         ))
 
-        # 当前无人机位置
-        curr_positions = []
-        for i in range(n):
-            curr_positions.append(uav_hist[i][t])
-
-        # ===== 用户 → 最近无人机（通信链路）=====
-        for p in u_pos:
-            dmin = 1e9
-            target = None
-            for i in range(n):
-                u = curr_positions[i]
-                d = np.hypot(p[0]-u[0], p[1]-u[1])
-                if d < dmin:
-                    dmin = d
-                    target = u
-
-            data.append(go.Scatter3d(
-                x=[p[0], target[0]],
-                y=[p[1], target[1]],
-                z=[50, target[2]],
-                mode='lines',
-                line=dict(color='rgba(0,200,255,0.3)', width=2),
-                showlegend=False
-            ))
-
-        # ===== UAV Mesh网络 =====
-        for i in range(n):
-            for j in range(i+1, n):
-                p1 = curr_positions[i]
-                p2 = curr_positions[j]
-                d = np.sqrt((p1[0]-p2[0])**2 + (p1[1]-p2[1])**2 + (p1[2]-p2[2])**2)
-
-                if d < 300:  # 通信距离
-                    data.append(go.Scatter3d(
-                        x=[p1[0], p2[0]],
-                        y=[p1[1], p2[1]],
-                        z=[p1[2], p2[2]],
-                        mode='lines',
-                        line=dict(color='lime', width=3),
-                        showlegend=False
-                    ))
-
-        # ===== UAV轨迹 + 覆盖 =====
         for i in range(n):
             traj = uav_hist[i][:t+1]
             curr = traj[-1]
 
-            # 轨迹
+            # ===== 轨迹（渐变感）=====
             data.append(go.Scatter3d(
                 x=[p[0] for p in traj],
                 y=[p[1] for p in traj],
                 z=[p[2] for p in traj],
                 mode='lines',
-                line=dict(color=colors[i%len(colors)], width=4, dash='dash'),
+                line=dict(
+                    color=colors[i % len(colors)],
+                    width=4,
+                    dash='dash'
+                ),
+                opacity=0.8,
                 showlegend=False
             ))
 
-            # 当前点
+            # ===== 当前点 =====
             data.append(go.Scatter3d(
                 x=[curr[0]], y=[curr[1]], z=[curr[2]],
                 mode='markers',
-                marker=dict(size=7, color=colors[i%len(colors)]),
-                name=f"UAV-{i+1}" if t==0 else None
+                marker=dict(
+                    size=7,
+                    color=colors[i % len(colors)],
+                    line=dict(color='white', width=2)
+                ),
+                name=f'UAV-{i+1}' if t==0 else None,
+                showlegend=(t==0)
             ))
 
-            # 覆盖球（简化为圆盘）
-            theta = np.linspace(0, 2*np.pi, 30)
-            r = 120
+            # ===== 覆盖圈（呼吸效果）=====
+            theta = np.linspace(0, 2*np.pi, 40)
+            r = 120 + 10*np.sin(t/5)   # 呼吸变化
             cx = curr[0] + r*np.cos(theta)
             cy = curr[1] + r*np.sin(theta)
             cz = np.ones_like(cx) * curr[2]
@@ -208,8 +176,8 @@ def create_3d_animation(uav_hist, users):
             data.append(go.Scatter3d(
                 x=cx, y=cy, z=cz,
                 mode='lines',
-                line=dict(color=colors[i%len(colors)], width=2),
-                opacity=0.3,
+                line=dict(color=colors[i % len(colors)], width=2),
+                opacity=0.25,
                 showlegend=False
             ))
 
@@ -222,21 +190,37 @@ def create_3d_animation(uav_hist, users):
     fig.update_layout(
         updatemenus=[{
             "type": "buttons",
+            "showactive": False,
             "buttons": [
-                {"label": "▶ 播放", "method": "animate",
-                 "args": [None, {"frame": {"duration": 60, "redraw": True}}]},
-                {"label": "⏸ 暂停", "method": "animate",
-                 "args": [[None], {"frame": {"duration": 0}}]}
+                {
+                    "label": "▶ 播放",
+                    "method": "animate",
+                    "args": [None, {
+                        "frame": {"duration": 60, "redraw": False},
+                        "fromcurrent": True,
+                        "mode": "immediate"
+                    }]
+                },
+                {
+                    "label": "⏸ 暂停",
+                    "method": "animate",
+                    "args": [[None], {
+                        "frame": {"duration": 0},
+                        "mode": "immediate"
+                    }]
+                }
             ]
         }],
         scene=dict(
-            xaxis_title='X',
-            yaxis_title='Y',
-            zaxis_title='高度',
-            camera=dict(eye=dict(x=1.6, y=1.6, z=1.3))
+            xaxis_title='X (m)',
+            yaxis_title='Y (m)',
+            zaxis_title='高度 (m)',
+            camera=dict(eye=dict(x=1.6, y=1.6, z=1.2)),
+            bgcolor='rgba(0,0,0,0)'
         ),
-        height=600,
-        title="🚁 无人机协同通信网络（评委震撼版）"
+        height=580,
+        margin=dict(l=0, r=0, t=40, b=0),
+        title="🚁 三维无人机动态飞行（答辩高级版）"
     )
 
     return fig
