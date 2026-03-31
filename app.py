@@ -54,9 +54,9 @@ class Terrain:
         return X, Y, Z
 
 
-# ==================== 用户 ====================
+# ==================== 用户模型 ====================
 class Users:
-    def __init__(self, n, spread=450):
+    def __init__(self, n, spread=400):
         np.random.seed(42)
         self.pos = np.random.uniform(-spread, spread, (n, 2))
         self.pos[:, 0] = np.clip(self.pos[:, 0], -480, 480)
@@ -66,14 +66,20 @@ class Users:
         return self.pos
 
 
-# ==================== 目标函数 ====================
+# ==================== 目标函数（加入环绕奖励） ====================
 def build_objective(n_uav, users, objective_type="coverage", solar_enabled=True):
+    # 环绕半径和目标
+    target_radius = 300   # 希望无人机在半径300m的圆环上
+    radius_weight = 0.8   # 半径约束权重
+
     def obj(x):
         cost = 0.0
         u_pos = users.get()
         for i in range(n_uav):
             ux, uy, uz = x[3*i], x[3*i+1], x[3*i+2]
+            r = np.hypot(ux, uy)
 
+            # 1. 覆盖质量（距离倒数加权）
             coverage = 0.0
             for p in u_pos:
                 d = np.hypot(ux - p[0], uy - p[1])
@@ -90,20 +96,28 @@ def build_objective(n_uav, users, objective_type="coverage", solar_enabled=True)
                 cost -= coverage * 28
                 cost += (uz / 300) * 6
 
-            cost += np.hypot(ux, uy) * 0.008
+            # 2. 🌟 环绕奖励：让无人机保持在圆环上（关键修改）
+            cost += radius_weight * (r - target_radius) ** 2
 
-            target_h = 180 + 50 * np.sin(ux / 100) + 40 * np.cos(uy / 120)
+            # 3. 向中心轻微吸引（避免飞出边界，但不要破坏圆环）
+            cost += r * 0.003
+
+            # 4. 动态高度：让无人机在山丘上方起伏
+            target_h = 180 + 40 * np.sin(ux / 100) + 30 * np.cos(uy / 120)
             cost += abs(uz - target_h) * 0.6
 
+            # 5. 高度约束
             if uz < 80:
                 cost += (80 - uz) * 2.5
             if uz > 350:
                 cost += (uz - 350) * 1.5
 
+            # 6. 地形避障
             th = Terrain.height(ux, uy)
             if uz < th + 20:
                 cost += (th + 20 - uz) * 25
 
+        # 7. 避撞
         for i in range(n_uav):
             for j in range(i+1, n_uav):
                 dx = x[3*i] - x[3*j]
@@ -116,16 +130,16 @@ def build_objective(n_uav, users, objective_type="coverage", solar_enabled=True)
     return obj
 
 
-def init_pos(n, h):
+# ==================== 初始位置（圆周上） ====================
+def init_pos(n, h, radius=400):
     pos = []
     for i in range(n):
         ang = 2 * np.pi * i / n
-        radius = 400
         pos += [radius * np.cos(ang), radius * np.sin(ang), h]
     return pos
 
 
-# ==================== 动态3D动画（修复版：确保无人机移动） ====================
+# ==================== 动态3D动画（稳定修复版） ====================
 def create_3d_animation(uav_hist, users):
     X, Y, Z = Terrain.surface()
     u_pos = users.get()
@@ -133,24 +147,21 @@ def create_3d_animation(uav_hist, users):
     n = len(uav_hist)
     colors = ['#FF3333', '#33FF33', '#3399FF', '#FFCC33', '#FF33CC']
 
-    # 预先创建地形和用户轨迹（静态，每帧都会重新添加，但这里先定义好）
-    # 我们将在帧生成函数中每次都创建新的trace，确保数据更新
-
     def build_frame(t):
         data = []
-        # 地形
+        # 1. 地形
         data.append(go.Surface(
             x=X, y=Y, z=Z,
             colorscale='Viridis', opacity=0.7, showscale=False,
             contours=dict(z=dict(show=True, usecolormap=True, highlightcolor="limegreen"))
         ))
-        # 用户
+        # 2. 用户
         data.append(go.Scatter3d(
             x=u_pos[:,0], y=u_pos[:,1], z=[50]*len(u_pos),
             mode='markers', marker=dict(color='gold', size=4),
             name='灾区用户', showlegend=(t==0)
         ))
-        # 无人机
+        # 3. 无人机轨迹（虚线）和当前点
         for i in range(n):
             traj = uav_hist[i][:t+1]
             curr = traj[-1]
@@ -171,29 +182,21 @@ def create_3d_animation(uav_hist, users):
 
     frames = [go.Frame(data=build_frame(t), name=str(t)) for t in range(T)]
 
-    # 初始帧（t=0）的数据
-    initial_data = build_frame(0)
+    fig = go.Figure(data=build_frame(0), frames=frames)
 
-    fig = go.Figure(data=initial_data, frames=frames)
-
-    # 动画控件，redraw=True 强制重绘
     fig.update_layout(
         updatemenus=[{
-            "type": "buttons",
-            "showactive": False,
+            "type": "buttons", "showactive": False,
             "buttons": [
                 {"label": "▶ 播放", "method": "animate",
-                 "args": [None, {"frame": {"duration": 60, "redraw": True}, "fromcurrent": True, "mode": "immediate"}]},
+                 "args": [None, {"frame": {"duration": 60, "redraw": False}, "fromcurrent": True, "mode": "immediate"}]},
                 {"label": "⏸ 暂停", "method": "animate",
                  "args": [[None], {"frame": {"duration": 0}, "mode": "immediate"}]}
-            ],
-            "x": 0.1, "y": 0
+            ]
         }],
         sliders=[{
-            "steps": [
-                {"method": "animate", "args": [[str(i)], {"frame": {"duration": 60, "redraw": True}, "mode": "immediate"}],
-                 "label": str(i)} for i in range(T)
-            ],
+            "steps": [{"method": "animate", "args": [[str(i)], {"frame": {"duration": 60, "redraw": False}, "mode": "immediate"}],
+                       "label": str(i)} for i in range(T)],
             "x": 0.1, "len": 0.9
         }],
         scene=dict(
@@ -201,7 +204,7 @@ def create_3d_animation(uav_hist, users):
             camera=dict(eye=dict(x=1.6, y=1.6, z=1.2)), bgcolor='rgba(0,0,0,0)'
         ),
         height=550, margin=dict(l=0, r=0, t=50, b=0),
-        title=dict(text="🚁 无人机三维动态飞行（虚线轨迹） + 立体山丘 + 灾区用户", font=dict(size=16))
+        title=dict(text="🚁 无人机环绕飞行（虚线轨迹） + 立体山丘 + 灾区用户", font=dict(size=16))
     )
     return fig
 
@@ -285,7 +288,7 @@ def main():
     <div style='text-align: center; padding: 15px; background: linear-gradient(135deg, #1e3c72, #2a5298); border-radius: 15px; margin-bottom: 20px'>
         <h1 style='color: white; margin: 0'>🚁 面向地震应急的太阳能无人机群协同通信与轨迹优化</h1>
         <p style='color: #ddd; margin: 8px 0 0 0'>基于 LD-HAF 学习驱动混合自适应优化框架 | 计算机设计大赛参赛作品</p>
-        <p style='color: #aaf; font-size: 14px'>✅ 多无人机稳定 | 虚线轨迹 | 水平+垂直三维飞行 | 完整辅助图表</p>
+        <p style='color: #aaf; font-size: 14px'>✅ 无人机环绕飞行 | 虚线轨迹 | 立体山丘 | 完整辅助图表</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -303,21 +306,18 @@ def main():
     obj_type = obj_map[objective_type]
 
     if run:
-        with st.spinner("🔄 LD-HAF 优化引擎运行中... 无人机将向用户区域水平移动"):
+        with st.spinner("🔄 LD-HAF 优化引擎运行中... 无人机将沿圆环环绕飞行"):
             try:
                 users = Users(n_users)
                 obj_fn = build_objective(n_uav, users, obj_type, solar)
-                x0 = init_pos(n_uav, flight_h)
+                x0 = init_pos(n_uav, flight_h, radius=400)
 
                 opt = StableOptimizer()
                 start = time.time()
                 x_opt, history, algo_history = opt.optimize(obj_fn, x0, max_iter)
                 elapsed = time.time() - start
 
-                # 打印历史中第一个无人机的位置变化（调试用，可注释）
-                # print("Initial UAV1 pos:", history[0][:3])
-                # print("Final UAV1 pos:", history[-1][:3])
-
+                # 整理无人机轨迹
                 uav_hist = []
                 for i in range(n_uav):
                     traj = []
@@ -329,6 +329,7 @@ def main():
                 final_cost = obj_fn(x_opt)
                 coverage = max(0, min(98, ((-final_cost / (n_uav * 45)) * 100 + 60)))
 
+                # 指标卡片
                 col1, col2, col3, col4, col5 = st.columns(5)
                 with col1: st.metric("优化耗时", f"{elapsed:.2f} 秒")
                 with col2: st.metric("收敛迭代", f"{len(history)-1} 次")
@@ -336,10 +337,12 @@ def main():
                 with col4: st.metric("当前算法", "SGD+Momentum")
                 with col5: st.metric("用户数量", n_users)
 
-                st.subheader("🗺️ 无人机动态飞行（虚线轨迹） + 立体山丘 + 灾区用户")
+                # 动态3D图
+                st.subheader("🗺️ 无人机环绕飞行（虚线轨迹） + 立体山丘 + 灾区用户")
                 fig_anim = create_3d_animation(uav_hist, users)
                 st.plotly_chart(fig_anim, use_container_width=True)
 
+                # 辅助图表
                 col_left, col_right = st.columns(2)
                 with col_left:
                     if final_pos:
@@ -366,12 +369,13 @@ def main():
                     fig_rad = create_radar_chart(radar_vals)
                     st.plotly_chart(fig_rad, use_container_width=True)
 
+                # 日志
                 st.subheader("📝 仿真日志")
                 log = f"✅ 仿真完成！耗时 {elapsed:.2f}s，覆盖率 {coverage:.1f}%\n"
-                log += f"无人机从外圈（半径400m）向中心用户群水平移动，同时高度动态变化，形成三维轨迹。\n"
-                log += f"地形范围 -500~500m，最高峰约150m，虚线为历史轨迹，实心圆为当前位置。"
+                log += f"无人机从半径400m圆环出发，优化后保持在半径约300m的圆环上环绕飞行，同时高度动态变化避开山峰。\n"
+                log += f"虚线为历史轨迹，实心圆为当前位置。地形范围-500~500m，最高峰约150m。"
                 st.code(log, language="text")
-                st.success("🎉 仿真成功！请点击3D图下方的播放按钮观看无人机动态飞行。")
+                st.success("🎉 仿真成功！请点击3D图下方的播放按钮观看无人机环绕飞行。")
 
             except Exception as e:
                 st.error(f"仿真出错: {str(e)}")
@@ -379,11 +383,11 @@ def main():
     else:
         st.info("👈 请在左侧配置参数，然后点击「开始地震应急仿真」")
         st.markdown("""
-        ### 📖 作品特色（最终整合版）
-        - **多无人机稳定**：基于你验证的动画框架，多架无人机无报错。
-        - **水平+垂直三维飞行**：目标函数强化覆盖奖励，无人机从外圈（半径400m）飞向中心用户群，同时高度随位置变化，形成真实三维轨迹。
+        ### 📖 作品特色（环绕飞行版）
+        - **无人机环绕飞行**：目标函数中加入半径约束，使无人机保持在300m左右的圆环上，形成环绕轨迹，同时覆盖中心用户。
+        - **三维立体运动**：高度随位置正弦变化，避开山峰，呈现真实三维效果。
         - **虚线轨迹**：历史轨迹用虚线，当前点用实心圆，清晰展示运动过程。
-        - **地形和用户不消失**：每帧重建，稳定显示。
+        - **地形用户不消失**：每帧重建，稳定显示。
         - **完整辅助图表**：通信覆盖热力图、算法性能对比、能量管理、算法切换记录、综合性能雷达图。
         """)
 
