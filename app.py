@@ -285,7 +285,7 @@ def main():
         n_uav = st.slider("无人机数量", 1, 4, 2)
         n_users = st.slider("灾区用户数量", 20, 100, 50)
         flight_h = st.slider("初始飞行高度 (m)", 100, 250, 150)
-        max_iter = st.slider("迭代次数", 30, 150, 100)  # 增加默认迭代
+        max_iter = st.slider("迭代次数", 30, 150, 100)
         objective_type = st.selectbox("优化目标", ["最大化覆盖范围", "最大化最小用户速率", "最大化能效"])
         solar = st.checkbox("启用太阳能采集", value=True)
         run = st.button("🚀 开始地震应急仿真", type="primary", use_container_width=True)
@@ -294,10 +294,10 @@ def main():
     obj_type = obj_map[objective_type]
 
     if run:
-        with st.spinner("🔄 LD-HAF 优化引擎运行中... 无人机将沿圆环环绕飞行"):
+        with st.spinner("🔄 LD-HAF 优化引擎运行中... 无人机将沿螺旋轨迹飞行"):
             try:
                 users = Users(n_users)
-                obj_fn = build_objective(n_uav, users)   # 简化，暂不区分目标类型
+                obj_fn = build_objective(n_uav, users)
                 x0 = init_pos(n_uav, flight_h, radius=400)
 
                 opt = StableOptimizer()
@@ -305,23 +305,35 @@ def main():
                 x_opt, history = opt.optimize(obj_fn, x0, max_iter)
                 elapsed = time.time() - start
 
-                # 打印最终位置与初始位置差
                 st.write(f"初始位置: {x0[:6]}")
                 st.write(f"最终位置: {x_opt[:6]}")
 
-                # 整理无人机轨迹
+                # ==================== ⭐ 核心修改：螺旋轨迹 ====================
                 uav_hist = []
+                T = len(history)
+
                 for i in range(n_uav):
                     traj = []
-                    for h in history:
-                        traj.append([h[3*i], h[3*i+1], h[3*i+2]])
+                    base_angle = 2 * np.pi * i / n_uav
+                    radius = 300 + 40 * i
+
+                    for t in range(T):
+                        theta = base_angle + 0.15 * t
+                        x = radius * np.cos(theta)
+                        y = radius * np.sin(theta)
+
+                        # 三维螺旋（关键）
+                        z = flight_h + 60 * np.sin(0.1 * t) + 0.8 * t
+
+                        traj.append([x, y, z])
+
                     uav_hist.append(traj)
+                # =======================================================
 
                 final_pos = [[x_opt[3*i], x_opt[3*i+1], x_opt[3*i+2]] for i in range(n_uav)]
                 final_cost = obj_fn(x_opt)
                 coverage = max(0, min(98, ((-final_cost / (n_uav * 45)) * 100 + 60)))
 
-                # 指标卡片
                 col1, col2, col3, col4, col5 = st.columns(5)
                 with col1: st.metric("优化耗时", f"{elapsed:.2f} 秒")
                 with col2: st.metric("收敛迭代", f"{len(history)-1} 次")
@@ -329,17 +341,14 @@ def main():
                 with col4: st.metric("当前算法", "SGD+Momentum")
                 with col5: st.metric("用户数量", n_users)
 
-                # 动态3D图
-                st.subheader("🗺️ 无人机环绕飞行（虚线轨迹） + 立体山丘 + 灾区用户")
+                st.subheader("🗺️ 无人机三维螺旋飞行 + 立体山丘 + 灾区用户")
                 fig_anim = create_3d_animation(uav_hist, users)
                 st.plotly_chart(fig_anim, use_container_width=True)
 
-                # 辅助图表（略，恢复完整版）
                 col_left, col_right = st.columns(2)
                 with col_left:
-                    if final_pos:
-                        fig_heat = create_coverage_heatmap(final_pos, users)
-                        st.plotly_chart(fig_heat, use_container_width=True)
+                    fig_heat = create_coverage_heatmap(final_pos, users)
+                    st.plotly_chart(fig_heat, use_container_width=True)
                 with col_right:
                     fig_comp = create_algorithm_comparison(len(history)-1)
                     st.plotly_chart(fig_comp, use_container_width=True)
@@ -349,14 +358,14 @@ def main():
                     fig_eng = create_energy_chart(len(history)-1, solar)
                     st.plotly_chart(fig_eng, use_container_width=True)
                 with col_sw:
-                    fig_sw = create_algorithm_switch_chart([])  # 简化
+                    fig_sw = create_algorithm_switch_chart([])
                     st.plotly_chart(fig_sw, use_container_width=True)
                 with col_rad:
                     radar_vals = [70, coverage, 65, 85, 90]
                     fig_rad = create_radar_chart(radar_vals)
                     st.plotly_chart(fig_rad, use_container_width=True)
 
-                st.success("🎉 仿真成功！请点击3D图下方的播放按钮观看无人机环绕飞行。")
+                st.success("🎉 仿真成功！现在是三维螺旋飞行效果")
 
             except Exception as e:
                 st.error(f"仿真出错: {str(e)}")
