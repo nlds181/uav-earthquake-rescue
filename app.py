@@ -192,7 +192,7 @@ def create_3d_animation(uav_hist, users):
             camera=dict(eye=dict(x=1.6, y=1.6, z=1.2)), bgcolor='rgba(0,0,0,0)'
         ),
         height=550, margin=dict(l=0, r=0, t=50, b=0),
-        title=dict(text="🚁 无人机环绕飞行（虚线轨迹） + 立体山丘 + 灾区用户", font=dict(size=16))
+        title=dict(text="🚁 无人机环绕飞行 + 立体山丘 + 灾区用户", font=dict(size=16))
     )
     return fig
 
@@ -274,8 +274,8 @@ def create_radar_chart(metrics):
 def main():
     st.markdown("""
     <div style='text-align: center; padding: 15px; background: linear-gradient(135deg, #1e3c72, #2a5298); border-radius: 15px; margin-bottom: 20px'>
-        <h1 style='color: white; margin: 0'>🚁 面向地震应急的太阳能无人机群协同通信与轨迹优化</h1>
-        <p style='color: #ddd; margin: 8px 0 0 0'>基于 LD-HAF 学习驱动混合自适应优化框架 | 计算机设计大赛参赛作品</p>
+        <h1 style='color: white; margin: 0'>🚁 光翼救援 —— 基于太阳能无人机群的地震应急通信与轨迹优化系统</h1>
+        <p style='color: #ddd; margin: 8px 0 0 0'>基于 LD-HAF 学习驱动混合自适应优化框架 </p>
         <p style='color: #aaf; font-size: 14px'>✅ 无人机环绕飞行 | 虚线轨迹 | 立体山丘 | 完整辅助图表</p>
     </div>
     """, unsafe_allow_html=True)
@@ -373,7 +373,7 @@ def main():
     else:
         st.info("👈 请在左侧配置参数，然后点击「开始地震应急仿真」")
         st.markdown("""
-        ### 📖 作品特色（最终修复版）
+        ### 📖 作品特色
         - **无人机环绕飞行**：优化器确保无人机在半径约300m的圆环上运动。
         - **虚线轨迹**：历史轨迹用虚线，当前点为实心圆。
         - **地形用户不消失**：每帧重建，稳定显示。
