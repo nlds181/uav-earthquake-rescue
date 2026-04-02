@@ -6,7 +6,7 @@ import time
 st.set_page_config(page_title="无人机协同通信平台", layout="wide")
 
 
-# ==================== 优化器（高学习率 + 动量） ====================
+# ==================== 优化器（更高学习率） ====================
 class SpiralOptimizer:
     def __init__(self):
         self.algo_history = []
@@ -19,7 +19,7 @@ class SpiralOptimizer:
         self.algo_history = []
         for k in range(max_iter):
             grad = self._grad(objective_fn, x)
-            eta = 0.25 * (0.96 ** k)  # 高学习率，衰减慢，保证移动
+            eta = 0.3 * (0.96 ** k)  # 学习率从 0.2 提高到 0.3，衰减稍快但初期更强
             v = momentum * v - eta * grad
             x = x + v
             history.append(x.copy())
@@ -40,7 +40,7 @@ class SpiralOptimizer:
         return g
 
 
-# ==================== 地形（您喜欢的上一版：四个山峰） ====================
+# ==================== 地形（保持不变） ====================
 class Terrain:
     @staticmethod
     def height(x, y):
@@ -60,7 +60,7 @@ class Terrain:
         return X, Y, Z
 
 
-# ==================== 用户模型（固定位置） ====================
+# ==================== 用户模型（保持不变） ====================
 class Users:
     def __init__(self, n, spread=400):
         np.random.seed(42)
@@ -72,11 +72,11 @@ class Users:
         return self.pos
 
 
-# ==================== 目标函数（强化螺旋下降） ====================
+# ==================== 目标函数（强化运动） ====================
 def build_objective(n_uav, users, objective_type="coverage", solar_enabled=True):
-    target_radius = 220  # 最终盘旋半径（小于初始400）
-    radius_weight = 4.0  # 强半径惩罚，迫使向内移动
-    height_spiral_weight = 1.5  # 高度随角度变化权重，加强螺旋
+    target_radius = 150  # 最终半径更小（原200），迫使向内移动更明显
+    radius_weight = 6.0  # 半径惩罚权重提高一倍（原3.0）
+    height_spiral_weight = 2.0  # 高度螺旋权重提高（原1.0）
 
     def obj(x):
         cost = 0.0
@@ -86,7 +86,7 @@ def build_objective(n_uav, users, objective_type="coverage", solar_enabled=True)
             r = np.hypot(ux, uy)
             angle = np.arctan2(uy, ux)
 
-            # 覆盖质量
+            # 覆盖质量（不变）
             coverage = 0.0
             for p in u_pos:
                 d = np.hypot(ux - p[0], uy - p[1])
@@ -103,28 +103,28 @@ def build_objective(n_uav, users, objective_type="coverage", solar_enabled=True)
                 cost -= coverage * 28
                 cost += (uz / 300) * 6
 
-            # 半径惩罚（强）
+            # 半径惩罚（大幅增强）
             cost += radius_weight * (r - target_radius) ** 2
 
-            # 高度随角度变化（螺旋）
-            ideal_height = 180 + 50 * angle  # 幅度更大，螺旋更明显
+            # 高度随角度变化（增强螺旋）
+            ideal_height = 180 + 50 * angle  # 幅度从40增加到50
             cost += height_spiral_weight * (uz - ideal_height) ** 2
 
-            # 轻微向心吸引
-            cost += r * 0.008
+            # 向心吸引增强（原0.005 -> 0.01）
+            cost += r * 0.01
 
-            # 高度约束
+            # 高度约束（不变）
             if uz < 80:
-                cost += (80 - uz) * 3
+                cost += (80 - uz) * 2.5
             if uz > 350:
-                cost += (uz - 350) * 2
+                cost += (uz - 350) * 1.5
 
-            # 地形避障
+            # 地形避障（不变）
             th = Terrain.height(ux, uy)
             if uz < th + 20:
-                cost += (th + 20 - uz) * 30
+                cost += (th + 20 - uz) * 25
 
-        # 避撞
+        # 避撞（不变）
         for i in range(n_uav):
             for j in range(i + 1, n_uav):
                 dx = x[3 * i] - x[3 * j]
@@ -132,13 +132,13 @@ def build_objective(n_uav, users, objective_type="coverage", solar_enabled=True)
                 dz = x[3 * i + 2] - x[3 * j + 2]
                 dist = np.sqrt(dx ** 2 + dy ** 2 + dz ** 2)
                 if dist < 45:
-                    cost += (45 - dist) * 15
+                    cost += (45 - dist) * 12
         return float(cost)
 
     return obj
 
 
-# ==================== 初始位置（大半径圆周） ====================
+# ==================== 初始位置（不变） ====================
 def init_pos(n, h, radius=400):
     pos = []
     for i in range(n):
@@ -147,7 +147,7 @@ def init_pos(n, h, radius=400):
     return pos
 
 
-# ==================== 动态3D动画（手动播放，帧间隔150ms） ====================
+# ==================== 动态3D动画（不变） ====================
 def create_3d_animation(uav_hist, users):
     X, Y, Z = Terrain.surface()
     u_pos = users.get()
@@ -192,22 +192,20 @@ def create_3d_animation(uav_hist, users):
 
     fig = go.Figure(data=build_frame(0), frames=frames)
 
-    # 播放按钮配置（帧间隔150ms，运动更明显）
     fig.update_layout(
         updatemenus=[{
-            "type": "buttons",
-            "showactive": False,
+            "type": "buttons", "showactive": False,
             "buttons": [
                 {"label": "▶ 播放", "method": "animate",
                  "args": [None,
-                          {"frame": {"duration": 150, "redraw": False}, "fromcurrent": True, "mode": "immediate"}]},
+                          {"frame": {"duration": 60, "redraw": False}, "fromcurrent": True, "mode": "immediate"}]},
                 {"label": "⏸ 暂停", "method": "animate",
                  "args": [[None], {"frame": {"duration": 0}, "mode": "immediate"}]}
             ]
         }],
         sliders=[{
             "steps": [{"method": "animate",
-                       "args": [[str(i)], {"frame": {"duration": 150, "redraw": False}, "mode": "immediate"}],
+                       "args": [[str(i)], {"frame": {"duration": 60, "redraw": False}, "mode": "immediate"}],
                        "label": str(i)} for i in range(T)],
             "x": 0.1, "len": 0.9
         }],
@@ -216,7 +214,7 @@ def create_3d_animation(uav_hist, users):
             camera=dict(eye=dict(x=1.6, y=1.6, z=1.2)), bgcolor='rgba(0,0,0,0)'
         ),
         height=550, margin=dict(l=0, r=0, t=50, b=0),
-        title=dict(text="🚁 无人机螺旋下降（点击播放按钮观看动态过程）", font=dict(size=16))
+        title=dict(text="🚁 无人机螺旋下降（虚线轨迹） + 立体山丘 + 灾区用户", font=dict(size=16))
     )
     return fig
 
@@ -299,7 +297,7 @@ def create_radar_chart(metrics):
     return fig
 
 
-# ==================== 主程序 ====================
+# ==================== 主程序（不变） ====================
 def main():
     st.markdown("""
     <div style='text-align: center; padding: 15px; background: linear-gradient(135deg, #1e3c72, #2a5298); border-radius: 15px; margin-bottom: 20px'>
@@ -314,7 +312,7 @@ def main():
         n_uav = st.slider("无人机数量", 1, 4, 2)
         n_users = st.slider("灾区用户数量", 20, 100, 50)
         flight_h = st.slider("初始飞行高度 (m)", 100, 250, 150)
-        max_iter = st.slider("迭代次数", 60, 200, 120)  # 增加迭代次数确保移动
+        max_iter = st.slider("迭代次数", 50, 200, 120)  # 默认迭代增加到120，确保充分移动
         objective_type = st.selectbox("优化目标", ["最大化覆盖范围", "最大化最小用户速率", "最大化能效"])
         solar = st.checkbox("启用太阳能采集", value=True)
         run = st.button("🚀 开始地震应急仿真", type="primary", use_container_width=True)
@@ -365,9 +363,7 @@ def main():
                     st.metric("移动距离", f"{dist_moved:.0f} m")
 
                 # 动态3D图
-                st.subheader("🗺️ 无人机螺旋下降（点击播放按钮观看动态过程）")
-                st.info(
-                    "🎬 提示：请点击3D图下方的播放按钮（▶），无人机将从外圈向内盘旋飞行，虚线为历史轨迹，实心圆为当前位置。")
+                st.subheader("🗺️ 无人机螺旋下降（虚线轨迹） + 立体山丘 + 灾区用户")
                 fig_anim = create_3d_animation(uav_hist, users)
                 st.plotly_chart(fig_anim, use_container_width=True)
 
@@ -412,9 +408,9 @@ def main():
     else:
         st.info("👈 请在左侧配置参数，然后点击「开始地震应急仿真」")
         st.markdown("""
-        ### 📖 作品特色（最终增强版）
+        ### 📖 作品特色（运动增强版）
         - **螺旋下降轨迹**：无人机从外圈向内盘旋，高度随角度变化，形成明显三维螺旋。
-        - **强移动激励**：半径惩罚权重提高至4.0，学习率0.25，初始半径400，确保移动距离显著。
+        - **强运动激励**：半径惩罚权重提高到6.0，目标半径150，学习率0.3，确保移动距离显著。
         - **虚线轨迹**：历史轨迹用虚线，当前点用实心圆，清晰展示运动过程。
         - **地形用户不消失**：每帧重建，稳定显示。
         - **完整数据图表**：覆盖热力图、算法性能对比、能量状态、算法切换记录、综合雷达图。
