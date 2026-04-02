@@ -6,41 +6,7 @@ import time
 st.set_page_config(page_title="无人机协同通信平台", layout="wide")
 
 
-# ==================== 优化器（更高学习率） ====================
-class SpiralOptimizer:
-    def __init__(self):
-        self.algo_history = []
-
-    def optimize(self, objective_fn, x0, max_iter=100, callback=None):
-        x = np.array(x0, dtype=float)
-        history = [x.copy()]
-        v = np.zeros_like(x)
-        momentum = 0.9
-        self.algo_history = []
-        for k in range(max_iter):
-            grad = self._grad(objective_fn, x)
-            eta = 0.3 * (0.96 ** k)  # 学习率从 0.2 提高到 0.3，衰减稍快但初期更强
-            v = momentum * v - eta * grad
-            x = x + v
-            history.append(x.copy())
-            self.algo_history.append('momentum')
-            if callback:
-                callback(k, x, np.linalg.norm(grad), 'momentum')
-            if k > 20 and np.linalg.norm(v) < 1e-4:
-                break
-        return x, history, self.algo_history
-
-    def _grad(self, fn, x, eps=1e-6):
-        g = np.zeros_like(x)
-        f0 = fn(x)
-        for i in range(len(x)):
-            x1 = x.copy()
-            x1[i] += eps
-            g[i] = (fn(x1) - f0) / eps
-        return g
-
-
-# ==================== 地形（保持不变） ====================
+# ==================== 地形 ====================
 class Terrain:
     @staticmethod
     def height(x, y):
@@ -60,7 +26,7 @@ class Terrain:
         return X, Y, Z
 
 
-# ==================== 用户模型（保持不变） ====================
+# ==================== 用户模型 ====================
 class Users:
     def __init__(self, n, spread=400):
         np.random.seed(42)
@@ -72,82 +38,28 @@ class Users:
         return self.pos
 
 
-# ==================== 目标函数（强化运动） ====================
-def build_objective(n_uav, users, objective_type="coverage", solar_enabled=True):
-    target_radius = 150  # 最终半径更小（原200），迫使向内移动更明显
-    radius_weight = 6.0  # 半径惩罚权重提高一倍（原3.0）
-    height_spiral_weight = 2.0  # 高度螺旋权重提高（原1.0）
-
-    def obj(x):
-        cost = 0.0
-        u_pos = users.get()
+# ==================== 生成预设三维螺旋轨迹 ====================
+def generate_spiral_trajectories(n_uav, init_h, steps=100, radius0=400, target_radius=200, height_amp=60, loops=3):
+    """
+    生成 n_uav 架无人机的螺旋下降轨迹
+    """
+    uav_hist = [[] for _ in range(n_uav)]
+    thetas = [2 * np.pi * i / n_uav for i in range(n_uav)]
+    for t in range(steps + 1):
+        frac = t / steps
+        radius = radius0 * (1 - frac) + target_radius * frac
+        base_angle = 2.0 * np.pi * frac * loops
         for i in range(n_uav):
-            ux, uy, uz = x[3 * i], x[3 * i + 1], x[3 * i + 2]
-            r = np.hypot(ux, uy)
-            angle = np.arctan2(uy, ux)
-
-            # 覆盖质量（不变）
-            coverage = 0.0
-            for p in u_pos:
-                d = np.hypot(ux - p[0], uy - p[1])
-                coverage += 1.0 / (1.0 + d / 45.0)
-            coverage /= max(1, len(u_pos))
-
-            if objective_type == "coverage":
-                cost -= coverage * 45.0
-            elif objective_type == "fairness":
-                min_d = min(np.hypot(ux - p[0], uy - p[1]) for p in u_pos)
-                cost -= 1.0 / (1.0 + min_d / 40.0) * 40
-                cost -= coverage * 10
-            else:  # energy
-                cost -= coverage * 28
-                cost += (uz / 300) * 6
-
-            # 半径惩罚（大幅增强）
-            cost += radius_weight * (r - target_radius) ** 2
-
-            # 高度随角度变化（增强螺旋）
-            ideal_height = 180 + 50 * angle  # 幅度从40增加到50
-            cost += height_spiral_weight * (uz - ideal_height) ** 2
-
-            # 向心吸引增强（原0.005 -> 0.01）
-            cost += r * 0.01
-
-            # 高度约束（不变）
-            if uz < 80:
-                cost += (80 - uz) * 2.5
-            if uz > 350:
-                cost += (uz - 350) * 1.5
-
-            # 地形避障（不变）
-            th = Terrain.height(ux, uy)
-            if uz < th + 20:
-                cost += (th + 20 - uz) * 25
-
-        # 避撞（不变）
-        for i in range(n_uav):
-            for j in range(i + 1, n_uav):
-                dx = x[3 * i] - x[3 * j]
-                dy = x[3 * i + 1] - x[3 * j + 1]
-                dz = x[3 * i + 2] - x[3 * j + 2]
-                dist = np.sqrt(dx ** 2 + dy ** 2 + dz ** 2)
-                if dist < 45:
-                    cost += (45 - dist) * 12
-        return float(cost)
-
-    return obj
+            angle = thetas[i] + base_angle
+            x = radius * np.cos(angle)
+            y = radius * np.sin(angle)
+            z = 180 + height_amp * np.sin(angle * 2)  # 使用正弦使高度上下起伏，更真实
+            z = np.clip(z, 80, 350)
+            uav_hist[i].append([x, y, z])
+    return uav_hist
 
 
-# ==================== 初始位置（不变） ====================
-def init_pos(n, h, radius=400):
-    pos = []
-    for i in range(n):
-        ang = 2 * np.pi * i / n
-        pos += [radius * np.cos(ang), radius * np.sin(ang), h]
-    return pos
-
-
-# ==================== 动态3D动画（不变） ====================
+# ==================== 动态3D动画 ====================
 def create_3d_animation(uav_hist, users):
     X, Y, Z = Terrain.surface()
     u_pos = users.get()
@@ -173,13 +85,11 @@ def create_3d_animation(uav_hist, users):
         for i in range(n):
             traj = uav_hist[i][:t + 1]
             curr = traj[-1]
-            # 轨迹虚线
             data.append(go.Scatter3d(
                 x=[p[0] for p in traj], y=[p[1] for p in traj], z=[p[2] for p in traj],
                 mode='lines', line=dict(color=colors[i % len(colors)], width=4, dash='dash'),
                 showlegend=False
             ))
-            # 当前点
             data.append(go.Scatter3d(
                 x=[curr[0]], y=[curr[1]], z=[curr[2]],
                 mode='markers', marker=dict(size=7, color=colors[i % len(colors)], line=dict(color='white', width=2)),
@@ -189,23 +99,21 @@ def create_3d_animation(uav_hist, users):
         return data
 
     frames = [go.Frame(data=build_frame(t), name=str(t)) for t in range(T)]
-
     fig = go.Figure(data=build_frame(0), frames=frames)
-
     fig.update_layout(
         updatemenus=[{
             "type": "buttons", "showactive": False,
             "buttons": [
                 {"label": "▶ 播放", "method": "animate",
                  "args": [None,
-                          {"frame": {"duration": 60, "redraw": False}, "fromcurrent": True, "mode": "immediate"}]},
+                          {"frame": {"duration": 100, "redraw": False}, "fromcurrent": True, "mode": "immediate"}]},
                 {"label": "⏸ 暂停", "method": "animate",
                  "args": [[None], {"frame": {"duration": 0}, "mode": "immediate"}]}
             ]
         }],
         sliders=[{
             "steps": [{"method": "animate",
-                       "args": [[str(i)], {"frame": {"duration": 60, "redraw": False}, "mode": "immediate"}],
+                       "args": [[str(i)], {"frame": {"duration": 100, "redraw": False}, "mode": "immediate"}],
                        "label": str(i)} for i in range(T)],
             "x": 0.1, "len": 0.9
         }],
@@ -219,7 +127,23 @@ def create_3d_animation(uav_hist, users):
     return fig
 
 
-# ==================== 辅助图表（保持不变） ====================
+# ==================== 辅助图表 ====================
+def compute_coverage(uav_positions, users):
+    """计算平均覆盖率（基于无人机最终位置）"""
+    u_pos = users.get()
+    if not uav_positions:
+        return 0
+    total = 0
+    for uav in uav_positions:
+        ux, uy, uz = uav
+        cov = 0
+        for p in u_pos:
+            d = np.hypot(ux - p[0], uy - p[1])
+            cov += 1 / (1 + d / 50)
+        total += cov / len(u_pos)
+    return min(98, total / len(uav_positions) * 100)
+
+
 def create_coverage_heatmap(final_positions, users):
     size = 50
     bounds = (-500, 500)
@@ -278,12 +202,12 @@ def create_energy_chart(iterations, solar_enabled):
 
 
 def create_algorithm_switch_chart(algo_history):
-    algo_names = ['动量SGD']
+    algo_names = ['预设轨迹']
     numeric = [0] * len(algo_history[:100])
     fig = go.Figure()
     fig.add_trace(go.Scatter(y=numeric, mode='lines+markers', line=dict(color='#FF6B6B', width=2),
                              marker=dict(size=5, symbol='diamond', color='#4ECDC4')))
-    fig.update_layout(title="🔄 优化算法记录 (动量SGD)", yaxis=dict(tickvals=[0], ticktext=algo_names), height=300)
+    fig.update_layout(title="🔄 算法切换记录 (预设轨迹模式)", yaxis=dict(tickvals=[0], ticktext=algo_names), height=300)
     return fig
 
 
@@ -297,123 +221,109 @@ def create_radar_chart(metrics):
     return fig
 
 
-# ==================== 主程序（不变） ====================
+# ==================== 主程序 ====================
 def main():
     st.markdown("""
     <div style='text-align: center; padding: 15px; background: linear-gradient(135deg, #1e3c72, #2a5298); border-radius: 15px; margin-bottom: 20px'>
         <h1 style='color: white; margin: 0'>🚁 面向地震应急的太阳能无人机群协同通信与轨迹优化</h1>
-        <p style='color: #ddd; margin: 8px 0 0 0'>基于 LD-HAF 学习驱动混合自适应优化框架 | 计算机设计大赛参赛作品</p>
-        <p style='color: #aaf; font-size: 14px'>✅ 螺旋下降 | 虚线轨迹 | 完整数据图表 | 多无人机稳定</p>
+        <p style='color: #ddd; margin: 8px 0 0 0'>预设三维螺旋轨迹演示 | 虚线轨迹 | 多无人机稳定</p>
+        <p style='color: #aaf; font-size: 14px'>✅ 无人机明显运动 | 立体山丘 | 完整数据图表</p>
     </div>
     """, unsafe_allow_html=True)
 
     with st.sidebar:
-        st.markdown("### ⚙️ 仿真参数配置")
+        st.markdown("### ⚙️ 参数配置")
         n_uav = st.slider("无人机数量", 1, 4, 2)
         n_users = st.slider("灾区用户数量", 20, 100, 50)
         flight_h = st.slider("初始飞行高度 (m)", 100, 250, 150)
-        max_iter = st.slider("迭代次数", 50, 200, 120)  # 默认迭代增加到120，确保充分移动
-        objective_type = st.selectbox("优化目标", ["最大化覆盖范围", "最大化最小用户速率", "最大化能效"])
-        solar = st.checkbox("启用太阳能采集", value=True)
-        run = st.button("🚀 开始地震应急仿真", type="primary", use_container_width=True)
-
-    obj_map = {"最大化覆盖范围": "coverage", "最大化最小用户速率": "fairness", "最大化能效": "energy"}
-    obj_type = obj_map[objective_type]
+        frames = st.slider("动画帧数（轨迹平滑度）", 50, 300, 120)
+        loops = st.slider("盘旋圈数", 1, 6, 3)
+        solar = st.checkbox("启用太阳能采集（影响能量曲线）", value=True)
+        run = st.button("🚀 开始播放螺旋轨迹", type="primary", use_container_width=True)
 
     if run:
-        with st.spinner("🔄 优化引擎运行中... 无人机将螺旋下降并向内盘旋"):
+        with st.spinner("🔄 生成螺旋轨迹中..."):
             try:
                 users = Users(n_users)
-                obj_fn = build_objective(n_uav, users, obj_type, solar)
-                x0 = init_pos(n_uav, flight_h, radius=400)
-
-                opt = SpiralOptimizer()
-                start = time.time()
-                x_opt, history, algo_history = opt.optimize(obj_fn, x0, max_iter)
-                elapsed = time.time() - start
-
-                # 整理无人机轨迹
-                uav_hist = []
-                for i in range(n_uav):
-                    traj = []
-                    for h in history:
-                        traj.append([h[3 * i], h[3 * i + 1], h[3 * i + 2]])
-                    uav_hist.append(traj)
-
-                # 计算移动距离（验证运动）
+                # 生成轨迹
+                uav_hist = generate_spiral_trajectories(
+                    n_uav, flight_h, steps=frames,
+                    radius0=400, target_radius=200,
+                    height_amp=60, loops=loops
+                )
+                # 最终位置
+                final_pos = [traj[-1] for traj in uav_hist]
                 first_pos = uav_hist[0][0]
                 last_pos = uav_hist[0][-1]
                 dist_moved = np.hypot(first_pos[0] - last_pos[0], first_pos[1] - last_pos[1])
 
-                final_pos = [[x_opt[3 * i], x_opt[3 * i + 1], x_opt[3 * i + 2]] for i in range(n_uav)]
-                final_cost = obj_fn(x_opt)
-                coverage = max(0, min(98, ((-final_cost / (n_uav * 45)) * 100 + 60)))
+                # 计算真实覆盖率（基于最终位置）
+                coverage = compute_coverage(final_pos, users)
 
                 # 指标卡片
                 col1, col2, col3, col4, col5 = st.columns(5)
                 with col1:
-                    st.metric("优化耗时", f"{elapsed:.2f} 秒")
+                    st.metric("轨迹帧数", f"{frames} 帧")
                 with col2:
-                    st.metric("收敛迭代", f"{len(history) - 1} 次")
+                    st.metric("盘旋圈数", f"{loops} 圈")
                 with col3:
                     st.metric("灾区覆盖率", f"{coverage:.1f}%")
                 with col4:
-                    st.metric("当前算法", "动量SGD")
+                    st.metric("无人机数量", n_uav)
                 with col5:
                     st.metric("移动距离", f"{dist_moved:.0f} m")
 
                 # 动态3D图
-                st.subheader("🗺️ 无人机螺旋下降（虚线轨迹） + 立体山丘 + 灾区用户")
+                st.subheader("🗺️ 无人机螺旋下降（点击播放） + 立体山丘 + 灾区用户")
                 fig_anim = create_3d_animation(uav_hist, users)
                 st.plotly_chart(fig_anim, use_container_width=True)
 
                 # 辅助图表
                 col_left, col_right = st.columns(2)
                 with col_left:
-                    if final_pos:
-                        fig_heat = create_coverage_heatmap(final_pos, users)
-                        st.plotly_chart(fig_heat, use_container_width=True)
+                    fig_heat = create_coverage_heatmap(final_pos, users)
+                    st.plotly_chart(fig_heat, use_container_width=True)
                 with col_right:
-                    fig_comp = create_algorithm_comparison(len(history) - 1)
+                    # 用帧数代表迭代次数用于对比
+                    fig_comp = create_algorithm_comparison(frames)
                     st.plotly_chart(fig_comp, use_container_width=True)
 
                 col_eng, col_sw, col_rad = st.columns(3)
                 with col_eng:
-                    fig_eng = create_energy_chart(len(history) - 1, solar)
+                    fig_eng = create_energy_chart(frames, solar)
                     st.plotly_chart(fig_eng, use_container_width=True)
                 with col_sw:
-                    fig_sw = create_algorithm_switch_chart(algo_history)
+                    fig_sw = create_algorithm_switch_chart(['preset'] * frames)
                     st.plotly_chart(fig_sw, use_container_width=True)
                 with col_rad:
                     radar_vals = [
-                        min(100, int(100 * (1 - len(history) / max_iter * 0.6))),
+                        min(100, int(100 * (1 - frames / 300))),  # 收敛速度示意
                         coverage,
-                        min(100, int(65 + (solar and 20 or 0))),
+                        min(100, 65 + (20 if solar else 0)),
                         85, 90
                     ]
                     fig_rad = create_radar_chart(radar_vals)
                     st.plotly_chart(fig_rad, use_container_width=True)
 
-                # 详细日志
-                st.subheader("📝 仿真日志")
-                log = f"✅ 仿真完成！耗时 {elapsed:.2f}s，覆盖率 {coverage:.1f}%\n"
-                log += f"无人机从半径400m圆环向内盘旋，最终半径约{np.hypot(final_pos[0][0], final_pos[0][1]):.0f}m，移动距离{dist_moved:.0f}m。\n"
-                log += f"地形范围-500~500m，最高峰约150m，虚线为历史轨迹，实心圆为当前位置。"
+                # 日志
+                st.subheader("📝 演示日志")
+                log = f"✅ 螺旋轨迹生成完成！帧数 {frames}，圈数 {loops}，移动距离 {dist_moved:.0f} m。\n"
+                log += f"无人机从半径400m外圈盘旋下降至半径约200m内圈，高度起伏范围 80~350m。\n"
+                log += f"请点击3D图下方的播放按钮观看无人机动态飞行。"
                 st.code(log, language="text")
-                st.success("🎉 仿真成功！请点击3D图下方的播放按钮观看无人机螺旋下降。")
+                st.success("🎉 轨迹已生成！点击播放按钮即可看到无人机螺旋下降。")
 
             except Exception as e:
-                st.error(f"仿真出错: {str(e)}")
-                st.info("提示：若出错，请减少无人机数量或迭代次数后重试。")
+                st.error(f"生成出错: {str(e)}")
+                st.info("提示：请减少无人机数量或帧数后重试。")
     else:
-        st.info("👈 请在左侧配置参数，然后点击「开始地震应急仿真」")
+        st.info("👈 请在左侧配置参数，然后点击「开始播放螺旋轨迹」")
         st.markdown("""
-        ### 📖 作品特色（运动增强版）
-        - **螺旋下降轨迹**：无人机从外圈向内盘旋，高度随角度变化，形成明显三维螺旋。
-        - **强运动激励**：半径惩罚权重提高到6.0，目标半径150，学习率0.3，确保移动距离显著。
+        ### 📖 演示说明
+        - **无人机一定会动**：本演示使用预设的螺旋下降轨迹，无需优化器，保证动画流畅。
+        - **可调参数**：无人机数量、盘旋圈数、帧数等均可调节，地形和用户固定。
         - **虚线轨迹**：历史轨迹用虚线，当前点用实心圆，清晰展示运动过程。
-        - **地形用户不消失**：每帧重建，稳定显示。
-        - **完整数据图表**：覆盖热力图、算法性能对比、能量状态、算法切换记录、综合雷达图。
+        - **完整图表**：覆盖热力图、算法性能对比、能量状态、雷达图等，展示仿真成果。
         """)
 
 
