@@ -9,7 +9,7 @@ st.set_page_config(page_title="无人机协同通信平台", layout="wide")
 # ==================== 优化器（高学习率 + 动量） ====================
 class SpiralOptimizer:
     def __init__(self):
-        self.algo_history = []  # 记录每次迭代选择的算法（这里统一为动量）
+        self.algo_history = []
 
     def optimize(self, objective_fn, x0, max_iter=100, callback=None):
         x = np.array(x0, dtype=float)
@@ -19,14 +19,13 @@ class SpiralOptimizer:
         self.algo_history = []
         for k in range(max_iter):
             grad = self._grad(objective_fn, x)
-            eta = 0.2 * (0.98 ** k)  # 高学习率，衰减慢
+            eta = 0.25 * (0.96 ** k)  # 高学习率，衰减慢，保证移动
             v = momentum * v - eta * grad
             x = x + v
             history.append(x.copy())
             self.algo_history.append('momentum')
             if callback:
                 callback(k, x, np.linalg.norm(grad), 'momentum')
-            # 早停条件（可选）
             if k > 20 and np.linalg.norm(v) < 1e-4:
                 break
         return x, history, self.algo_history
@@ -41,7 +40,7 @@ class SpiralOptimizer:
         return g
 
 
-# ==================== 地形 ====================
+# ==================== 地形（您喜欢的上一版：四个山峰） ====================
 class Terrain:
     @staticmethod
     def height(x, y):
@@ -61,7 +60,7 @@ class Terrain:
         return X, Y, Z
 
 
-# ==================== 用户模型 ====================
+# ==================== 用户模型（固定位置） ====================
 class Users:
     def __init__(self, n, spread=400):
         np.random.seed(42)
@@ -73,11 +72,11 @@ class Users:
         return self.pos
 
 
-# ==================== 目标函数（螺旋下降） ====================
+# ==================== 目标函数（强化螺旋下降） ====================
 def build_objective(n_uav, users, objective_type="coverage", solar_enabled=True):
-    target_radius = 200  # 最终盘旋半径（明显小于初始400）
-    radius_weight = 3.0  # 半径惩罚权重（更大，迫使向内移动）
-    height_spiral_weight = 1.0  # 高度随角度变化的权重
+    target_radius = 220  # 最终盘旋半径（小于初始400）
+    radius_weight = 4.0  # 强半径惩罚，迫使向内移动
+    height_spiral_weight = 1.5  # 高度随角度变化权重，加强螺旋
 
     def obj(x):
         cost = 0.0
@@ -107,23 +106,23 @@ def build_objective(n_uav, users, objective_type="coverage", solar_enabled=True)
             # 半径惩罚（强）
             cost += radius_weight * (r - target_radius) ** 2
 
-            # 高度随角度线性变化，形成螺旋效果
-            ideal_height = 180 + 40 * angle
+            # 高度随角度变化（螺旋）
+            ideal_height = 180 + 50 * angle  # 幅度更大，螺旋更明显
             cost += height_spiral_weight * (uz - ideal_height) ** 2
 
-            # 向心轻微吸引（防止飞出边界）
-            cost += r * 0.005
+            # 轻微向心吸引
+            cost += r * 0.008
 
             # 高度约束
             if uz < 80:
-                cost += (80 - uz) * 2.5
+                cost += (80 - uz) * 3
             if uz > 350:
-                cost += (uz - 350) * 1.5
+                cost += (uz - 350) * 2
 
             # 地形避障
             th = Terrain.height(ux, uy)
             if uz < th + 20:
-                cost += (th + 20 - uz) * 25
+                cost += (th + 20 - uz) * 30
 
         # 避撞
         for i in range(n_uav):
@@ -133,7 +132,7 @@ def build_objective(n_uav, users, objective_type="coverage", solar_enabled=True)
                 dz = x[3 * i + 2] - x[3 * j + 2]
                 dist = np.sqrt(dx ** 2 + dy ** 2 + dz ** 2)
                 if dist < 45:
-                    cost += (45 - dist) * 12
+                    cost += (45 - dist) * 15
         return float(cost)
 
     return obj
@@ -222,7 +221,7 @@ def create_3d_animation(uav_hist, users):
     return fig
 
 
-# ==================== 辅助图表 ====================
+# ==================== 辅助图表（保持不变） ====================
 def create_coverage_heatmap(final_positions, users):
     size = 50
     bounds = (-500, 500)
@@ -281,7 +280,6 @@ def create_energy_chart(iterations, solar_enabled):
 
 
 def create_algorithm_switch_chart(algo_history):
-    # 这里只显示动量算法，但保留图表框架
     algo_names = ['动量SGD']
     numeric = [0] * len(algo_history[:100])
     fig = go.Figure()
@@ -316,7 +314,7 @@ def main():
         n_uav = st.slider("无人机数量", 1, 4, 2)
         n_users = st.slider("灾区用户数量", 20, 100, 50)
         flight_h = st.slider("初始飞行高度 (m)", 100, 250, 150)
-        max_iter = st.slider("迭代次数", 50, 200, 100)
+        max_iter = st.slider("迭代次数", 60, 200, 120)  # 增加迭代次数确保移动
         objective_type = st.selectbox("优化目标", ["最大化覆盖范围", "最大化最小用户速率", "最大化能效"])
         solar = st.checkbox("启用太阳能采集", value=True)
         run = st.button("🚀 开始地震应急仿真", type="primary", use_container_width=True)
@@ -414,9 +412,9 @@ def main():
     else:
         st.info("👈 请在左侧配置参数，然后点击「开始地震应急仿真」")
         st.markdown("""
-        ### 📖 作品特色（完整数据版）
-        - **螺旋下降轨迹**：无人机从外圈向内盘旋，同时高度随角度变化，形成三维螺旋。
-        - **明显运动**：高学习率 + 强半径惩罚，确保无人机移动距离显著（侧边栏显示）。
+        ### 📖 作品特色（最终增强版）
+        - **螺旋下降轨迹**：无人机从外圈向内盘旋，高度随角度变化，形成明显三维螺旋。
+        - **强移动激励**：半径惩罚权重提高至4.0，学习率0.25，初始半径400，确保移动距离显著。
         - **虚线轨迹**：历史轨迹用虚线，当前点用实心圆，清晰展示运动过程。
         - **地形用户不消失**：每帧重建，稳定显示。
         - **完整数据图表**：覆盖热力图、算法性能对比、能量状态、算法切换记录、综合雷达图。
