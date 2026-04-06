@@ -170,8 +170,6 @@ def create_3d_animation(uav_hist, users):
     frames = [go.Frame(data=build_frame(t), name=str(t)) for t in range(T)]
 
     fig = go.Figure(data=build_frame(0), frames=frames)
-
-    # 关键修改：redraw=True
     fig.update_layout(
         updatemenus=[{
             "type": "buttons", "showactive": False,
@@ -197,7 +195,7 @@ def create_3d_animation(uav_hist, users):
     return fig
 
 
-# ==================== 辅助图表（简化） ====================
+# ==================== 辅助图表 ====================
 def create_coverage_heatmap(final_positions, users):
     size = 50
     bounds = (-500, 500)
@@ -308,7 +306,7 @@ def main():
                 st.write(f"初始位置: {x0[:6]}")
                 st.write(f"最终位置: {x_opt[:6]}")
 
-                # ==================== ⭐ 核心修改：螺旋轨迹 ====================
+                # ==================== 螺旋轨迹 ====================
                 uav_hist = []
                 T = len(history)
 
@@ -382,3 +380,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
