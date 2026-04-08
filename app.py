@@ -274,7 +274,7 @@ def create_radar_chart(metrics):
 def main():
     st.markdown("""
     <div style='text-align: center; padding: 15px; background: linear-gradient(135deg, #1e3c72, #2a5298); border-radius: 15px; margin-bottom: 20px'>
-        <h1 style='color: white; margin: 0'>🚁 面向地震应急的太阳能无人机群协同通信与轨迹优化系统</h1>
+        <h1 style='color: white; margin: 0'>🚁 面向地震应急的太阳能无人机群协同通信与轨迹优化仿真系统</h1>
         <p style='color: #ddd; margin: 8px 0 0 0'>基于 LD-HAF 学习驱动混合自适应优化框架 </p>
         <p style='color: #aaf; font-size: 14px'>✅ 无人机环绕飞行 | 虚线轨迹 | 立体山丘 | 完整辅助图表</p>
     </div>
