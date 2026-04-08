@@ -170,6 +170,8 @@ def create_3d_animation(uav_hist, users):
     frames = [go.Frame(data=build_frame(t), name=str(t)) for t in range(T)]
 
     fig = go.Figure(data=build_frame(0), frames=frames)
+
+    # 关键修改：redraw=True
     fig.update_layout(
         updatemenus=[{
             "type": "buttons", "showactive": False,
@@ -195,7 +197,7 @@ def create_3d_animation(uav_hist, users):
     return fig
 
 
-# ==================== 辅助图表 ====================
+# ==================== 辅助图表（简化） ====================
 def create_coverage_heatmap(final_positions, users):
     size = 50
     bounds = (-500, 500)
@@ -272,7 +274,7 @@ def create_radar_chart(metrics):
 def main():
     st.markdown("""
     <div style='text-align: center; padding: 15px; background: linear-gradient(135deg, #1e3c72, #2a5298); border-radius: 15px; margin-bottom: 20px'>
-        <h1 style='color: white; margin: 0'>🚁 光翼救援 —— 基于太阳能无人机群的地震应急通信与轨迹优化系统</h1>
+        <h1 style='color: white; margin: 0'>🚁 面向地震应急的太阳能无人机群协同通信与轨迹优化系统</h1>
         <p style='color: #ddd; margin: 8px 0 0 0'>基于 LD-HAF 学习驱动混合自适应优化框架 </p>
         <p style='color: #aaf; font-size: 14px'>✅ 无人机环绕飞行 | 虚线轨迹 | 立体山丘 | 完整辅助图表</p>
     </div>
@@ -306,7 +308,7 @@ def main():
                 st.write(f"初始位置: {x0[:6]}")
                 st.write(f"最终位置: {x_opt[:6]}")
 
-                # ==================== 螺旋轨迹 ====================
+                # ==================== ⭐ 核心修改：螺旋轨迹 ====================
                 uav_hist = []
                 T = len(history)
 
