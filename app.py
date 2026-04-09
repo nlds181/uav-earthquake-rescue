@@ -294,7 +294,7 @@ def main():
     obj_type = obj_map[objective_type]
 
     if run:
-        with st.spinner("🔄 LD-HAF 优化引擎运行中... 无人机将沿螺旋轨迹飞行"):
+        with st.spinner("🔄 LD-HAF 优化引擎运行中... "):
             try:
                 users = Users(n_users)
                 obj_fn = build_objective(n_uav, users)
@@ -365,7 +365,7 @@ def main():
                     fig_rad = create_radar_chart(radar_vals)
                     st.plotly_chart(fig_rad, use_container_width=True)
 
-                st.success("🎉 仿真成功！现在是三维螺旋飞行效果")
+                st.success("🎉 仿真环境模拟成功！")
 
             except Exception as e:
                 st.error(f"仿真出错: {str(e)}")
